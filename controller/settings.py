@@ -53,6 +53,11 @@ class LearningSettings:
     outcome_horizon_seconds: float
 
 
+@dataclass(frozen=True, slots=True)
+class TransactionSettings:
+    timeout_seconds: float
+
+
 def _config_path(path: str | Path | None) -> Path:
     return (
         Path(path)
@@ -144,6 +149,18 @@ def load_reroute_policy(
         ),
         cooldown_seconds=float(rerouting["cooldown_seconds"]),
     )
+
+
+def load_transaction_settings(
+    path: str | Path | None = None,
+) -> TransactionSettings:
+    rerouting = _load_document(path)["rerouting"]
+    timeout = float(rerouting["transaction_timeout_seconds"])
+    if timeout <= 0:
+        raise ValueError(
+            "transaction_timeout_seconds must be positive"
+        )
+    return TransactionSettings(timeout_seconds=timeout)
 
 
 def load_prediction_config(

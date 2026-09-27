@@ -28,6 +28,7 @@ rerouting:
   latency_increase_threshold: 0.30
   minimum_improvement: 0.10
   cooldown_seconds: 10
+  transaction_timeout_seconds: 3
 
 telemetry:
   poll_interval_seconds: 2

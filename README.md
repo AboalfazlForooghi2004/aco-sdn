@@ -21,6 +21,8 @@ and the initial Ryu discovery adapter:
 - unit tests for congestion-aware selection and failed-link exclusion.
 - Ryu switch/link discovery and OpenFlow 1.3 table-miss setup;
 - host learning with attachment-point move detection and cleanup.
+- topology-generation validation and two-phase OpenFlow Barrier
+  transactions with timeout rollback.
 
 Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and

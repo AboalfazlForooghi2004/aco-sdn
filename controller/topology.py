@@ -30,6 +30,11 @@ class TopologyManager:
         self._switches: set[int] = set()
         self._links: dict[tuple[int, int], LinkPorts] = {}
         self._hosts: dict[str, HostLocation] = {}
+        self._generation = 0
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     @property
     def switches(self) -> frozenset[int]:
@@ -44,9 +49,19 @@ class TopologyManager:
         return dict(self._hosts)
 
     def add_switch(self, dpid: int) -> None:
+        if dpid not in self._switches:
+            self._generation += 1
         self._switches.add(dpid)
 
     def remove_switch(self, dpid: int) -> None:
+        changed = (
+            dpid in self._switches
+            or any(dpid in edge for edge in self._links)
+            or any(
+                location.dpid == dpid
+                for location in self._hosts.values()
+            )
+        )
         self._switches.discard(dpid)
         self._links = {
             edge: ports
@@ -58,6 +73,8 @@ class TopologyManager:
             for mac, location in self._hosts.items()
             if location.dpid != dpid
         }
+        if changed:
+            self._generation += 1
 
     def add_link(
         self,
@@ -68,13 +85,20 @@ class TopologyManager:
     ) -> None:
         self.add_switch(source_dpid)
         self.add_switch(target_dpid)
-        self._links[(source_dpid, target_dpid)] = LinkPorts(
+        edge = (source_dpid, target_dpid)
+        value = LinkPorts(
             source_port=source_port,
             target_port=target_port,
         )
+        if self._links.get(edge) != value:
+            self._links[edge] = value
+            self._generation += 1
 
     def remove_link(self, source_dpid: int, target_dpid: int) -> None:
-        self._links.pop((source_dpid, target_dpid), None)
+        if self._links.pop(
+            (source_dpid, target_dpid), None
+        ) is not None:
+            self._generation += 1
 
     def learn_host(
         self,
@@ -95,11 +119,14 @@ class TopologyManager:
             port=port,
             last_seen=timestamp,
         )
-        return (
+        changed = (
             previous is None
             or previous.dpid != dpid
             or previous.port != port
         )
+        if changed:
+            self._generation += 1
+        return changed
 
     def host_location(self, mac: str) -> HostLocation | None:
         return self._hosts.get(mac.lower())
