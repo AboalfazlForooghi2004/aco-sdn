@@ -7,17 +7,17 @@ from experiments.runner import run_experiments
 
 
 class ExperimentRunnerTests(unittest.TestCase):
-    def test_runner_writes_three_algorithms_per_scenario(self) -> None:
+    def test_runner_writes_four_algorithms_per_scenario(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "results.csv"
 
             results = run_experiments(output)
 
-            self.assertEqual(len(results), 15)
+            self.assertEqual(len(results), 20)
             self.assertTrue(output.exists())
             with output.open(encoding="utf-8") as result_file:
                 rows = list(csv.DictReader(result_file))
-            self.assertEqual(len(rows), 15)
+            self.assertEqual(len(rows), 20)
 
     def test_dynamic_algorithms_avoid_congested_upper_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -39,7 +39,11 @@ class ExperimentRunnerTests(unittest.TestCase):
             "s1 -> s3 -> s5 -> s6",
         )
         self.assertEqual(
-            congestion["aco"].path,
+            congestion["aco_ant_system"].path,
+            "s1 -> s3 -> s5 -> s6",
+        )
+        self.assertEqual(
+            congestion["aco_mmas"].path,
             "s1 -> s3 -> s5 -> s6",
         )
 

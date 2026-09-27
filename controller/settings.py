@@ -89,13 +89,20 @@ def load_optimizer(
     cost = document["cost"]
     return AntColonyOptimizer(
         ACOConfig(
+            strategy=str(aco["strategy"]),
             alpha=float(aco["alpha"]),
             beta=float(aco["beta"]),
             evaporation=float(aco["evaporation"]),
             ants=int(aco["ants"]),
             iterations=int(aco["iterations"]),
             pheromone_initial=float(aco["pheromone_initial"]),
+            pheromone_min=float(aco["pheromone_min"]),
+            pheromone_max=float(aco["pheromone_max"]),
             deposit_q=float(aco["deposit_q"]),
+            stagnation_iterations=int(
+                aco["stagnation_iterations"]
+            ),
+            max_restarts=int(aco["max_restarts"]),
             seed=int(aco["seed"]),
         ),
         CostWeights(

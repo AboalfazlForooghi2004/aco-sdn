@@ -1,11 +1,16 @@
 aco:
+  strategy: mmas
   alpha: 1.0
   beta: 2.0
   evaporation: 0.4
   ants: 20
   iterations: 50
   pheromone_initial: 1.0
+  pheromone_min: 0.05
+  pheromone_max: 5.0
   deposit_q: 1.0
+  stagnation_iterations: 8
+  max_restarts: 1
   seed: 42
 
 cost:
