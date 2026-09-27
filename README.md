@@ -286,7 +286,21 @@ current and proposed paths:
 - before/after deltas and cost-improvement ratio.
 
 Autopilot blocks a migration when the proposed path fails simulation.
-The result explicitly warns that the flow's own bandwidth demand is not
-yet modeled and that telemetry is a point-in-time observation. This
-prevents the UI from presenting estimated benefits as guaranteed
-outcomes.
+When no fresh FlowStats estimate exists, the result explicitly warns
+that flow bandwidth was not modeled. Every result also identifies its
+telemetry as a point-in-time observation, preventing the UI from
+presenting estimated benefits as guaranteed outcomes.
+
+## Flow-demand-aware simulation
+
+The controller polls OpenFlow FlowStats and estimates directional flow
+bit/packet rates from ingress-switch counter deltas. An EWMA smooths
+short spikes, counter resets invalidate the estimate, and stale demand
+is not used.
+
+When a fresh estimate exists, What-if simulation projects the flow's
+load onto links that are new to the proposed route. Autopilot blocks a
+candidate whose projected maximum utilization exceeds the configured
+safety limit. The current MVP assumes a global link capacity and says
+so explicitly in the simulation warnings; per-port capacity is a future
+improvement.
