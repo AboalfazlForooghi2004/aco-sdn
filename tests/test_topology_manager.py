@@ -1,7 +1,10 @@
 import unittest
 
 from aco.models import LinkMetrics
-from controller.topology import TopologyManager
+from controller.topology import (
+    HostLearningPolicy,
+    TopologyManager,
+)
 
 
 class TopologyManagerTests(unittest.TestCase):
@@ -57,6 +60,40 @@ class TopologyManagerTests(unittest.TestCase):
         self.assertIsNotNone(location)
         assert location is not None
         self.assertEqual((location.dpid, location.port), (2, 7))
+
+    def test_untrusted_or_rapid_host_move_is_rejected(self) -> None:
+        topology = TopologyManager(
+            HostLearningPolicy(
+                move_hold_down_seconds=5,
+                trusted_edge_ports=frozenset(
+                    {(1, 3), (2, 7)}
+                ),
+            )
+        )
+        self.assertTrue(
+            topology.learn_host(
+                "aa:bb:cc:dd:ee:ff", 1, 3, observed_at=10
+            )
+        )
+        self.assertFalse(
+            topology.learn_host(
+                "aa:bb:cc:dd:ee:ff", 2, 7, observed_at=12
+            )
+        )
+        self.assertFalse(
+            topology.learn_host(
+                "11:22:33:44:55:66", 9, 9, observed_at=20
+            )
+        )
+        self.assertEqual(
+            topology.host_location(
+                "aa:bb:cc:dd:ee:ff"
+            ).dpid,
+            1,
+        )
+        self.assertIsNone(
+            topology.host_location("11:22:33:44:55:66")
+        )
 
     def test_switch_removal_cleans_links_and_hosts(self) -> None:
         topology = TopologyManager()

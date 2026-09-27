@@ -36,6 +36,9 @@ telemetry:
   max_age_seconds: 5
   latency_ewma_alpha: 0.30
   flow_demand_ewma_alpha: 0.40
+  history_path: data/telemetry.jsonl
+  history_interval_seconds: 5
+  history_max_records: 100000
 
 prediction:
   history_window_seconds: 300
@@ -64,3 +67,7 @@ learning:
   enabled: true
   dataset_path: data/routing-learning.jsonl
   outcome_horizon_seconds: 30
+
+host_security:
+  move_hold_down_seconds: 5
+  trusted_edge_ports: []

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from controller.flow_identity import FlowSelector
 from controller.topology import TopologyManager
 
 
@@ -11,6 +12,7 @@ class PlannedRule:
     source_mac: str
     destination_mac: str
     output_port: int
+    selector: FlowSelector | None = None
 
 
 def build_bidirectional_plan(
@@ -20,6 +22,7 @@ def build_bidirectional_plan(
     destination_mac: str,
     source_host_port: int,
     destination_host_port: int,
+    selector: FlowSelector | None = None,
 ) -> tuple[PlannedRule, ...]:
     if not path:
         raise ValueError("path cannot be empty")
@@ -42,6 +45,7 @@ def build_bidirectional_plan(
                 source_mac=source_mac.lower(),
                 destination_mac=destination_mac.lower(),
                 output_port=forward_port,
+                selector=selector,
             )
         )
         rules.append(
@@ -50,6 +54,11 @@ def build_bidirectional_plan(
                 source_mac=destination_mac.lower(),
                 destination_mac=source_mac.lower(),
                 output_port=reverse_port,
+                selector=(
+                    selector.reverse()
+                    if selector is not None
+                    else None
+                ),
             )
         )
     return tuple(rules)
@@ -87,8 +96,14 @@ class FlowManager:
             datapath = datapaths[rule.dpid]
             parser = datapath.ofproto_parser
             match = parser.OFPMatch(
-                eth_src=rule.source_mac,
-                eth_dst=rule.destination_mac,
+                **(
+                    rule.selector.openflow_match()
+                    if rule.selector is not None
+                    else {
+                        "eth_src": rule.source_mac,
+                        "eth_dst": rule.destination_mac,
+                    }
+                )
             )
             actions = [
                 parser.OFPActionOutput(rule.output_port)
@@ -129,8 +144,14 @@ class FlowManager:
             datapath = datapaths[rule.dpid]
             parser = datapath.ofproto_parser
             match = parser.OFPMatch(
-                eth_src=rule.source_mac,
-                eth_dst=rule.destination_mac,
+                **(
+                    rule.selector.openflow_match()
+                    if rule.selector is not None
+                    else {
+                        "eth_src": rule.source_mac,
+                        "eth_dst": rule.destination_mac,
+                    }
+                )
             )
             datapath.send_msg(
                 parser.OFPFlowMod(

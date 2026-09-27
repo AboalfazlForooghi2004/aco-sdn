@@ -9,6 +9,7 @@ from aco.cost import CostWeights
 from aco.optimizer import ACOConfig, AntColonyOptimizer
 from controller.rerouting import ReroutePolicy
 from controller.state import OperatingMode
+from controller.topology import HostLearningPolicy
 from prediction.engine import PredictionConfig
 
 
@@ -19,6 +20,9 @@ class TelemetrySettings:
     max_age_seconds: float
     latency_ewma_alpha: float
     flow_demand_ewma_alpha: float
+    history_path: str
+    history_interval_seconds: float
+    history_max_records: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +93,13 @@ def load_telemetry_settings(
         ),
         flow_demand_ewma_alpha=float(
             telemetry["flow_demand_ewma_alpha"]
+        ),
+        history_path=str(telemetry["history_path"]),
+        history_interval_seconds=float(
+            telemetry["history_interval_seconds"]
+        ),
+        history_max_records=int(
+            telemetry["history_max_records"]
         ),
     )
 
@@ -259,4 +270,20 @@ def load_learning_settings(
         enabled=bool(learning["enabled"]),
         dataset_path=str(learning["dataset_path"]),
         outcome_horizon_seconds=horizon,
+    )
+
+
+def load_host_learning_policy(
+    path: str | Path | None = None,
+) -> HostLearningPolicy:
+    security = _load_document(path)["host_security"]
+    trusted = set()
+    for value in security.get("trusted_edge_ports", ()):
+        dpid, port = str(value).split(":", maxsplit=1)
+        trusted.add((int(dpid), int(port)))
+    return HostLearningPolicy(
+        move_hold_down_seconds=float(
+            security["move_hold_down_seconds"]
+        ),
+        trusted_edge_ports=frozenset(trusted),
     )

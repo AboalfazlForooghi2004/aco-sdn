@@ -23,6 +23,12 @@ and the initial Ryu discovery adapter:
 - host learning with attachment-point move detection and cleanup.
 - topology-generation validation and two-phase OpenFlow Barrier
   transactions with timeout rollback.
+- per-port capacity discovery from OpenFlow Port Description,
+  metric provenance/confidence, and host-move hold-down controls.
+- normalized bidirectional L2/L3/L4 flow identity with TCP/UDP
+  five-tuple OpenFlow matches and MAC-only compatibility.
+- interval-limited durable telemetry history with topology generation,
+  metric provenance, confidence, and bounded compaction.
 
 Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and

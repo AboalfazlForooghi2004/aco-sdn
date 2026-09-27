@@ -11,7 +11,14 @@ from ryu.controller.handler import (
     set_ev_cls,
 )
 from ryu.lib import hub
-from ryu.lib.packet import ethernet, ether_types, packet
+from ryu.lib.packet import (
+    ethernet,
+    ether_types,
+    ipv4,
+    packet,
+    tcp,
+    udp,
+)
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
@@ -21,6 +28,7 @@ from controller.flow_demand import (
     FlowCounters,
     FlowDemandEstimator,
 )
+from controller.flow_identity import FlowSelector
 from controller.flow_manager import (
     FlowManager,
     build_bidirectional_plan,
@@ -42,6 +50,7 @@ from controller.simulation import WhatIfSimulator
 from controller.settings import (
     load_control_settings,
     load_event_settings,
+    load_host_learning_policy,
     load_learning_settings,
     load_optimizer,
     load_prediction_config,
@@ -57,6 +66,7 @@ from controller.state import (
     SnapshotStore,
 )
 from controller.telemetry import PortCounters, TelemetryCollector
+from controller.telemetry_history import TelemetryHistory
 from controller.topology import TopologyManager
 from controller.transactions import (
     RouteTransactionManager,
@@ -75,7 +85,9 @@ class ACOSDNController(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self.topology = TopologyManager()
+        self.topology = TopologyManager(
+            load_host_learning_policy()
+        )
         self.datapaths = {}
         self.telemetry_settings = load_telemetry_settings()
         self.telemetry = TelemetryCollector(
@@ -85,6 +97,11 @@ class ACOSDNController(app_manager.RyuApp):
             max_age_seconds=(
                 self.telemetry_settings.max_age_seconds
             ),
+        )
+        self.telemetry_history = TelemetryHistory(
+            self.telemetry_settings.history_path,
+            self.telemetry_settings.history_interval_seconds,
+            self.telemetry_settings.history_max_records,
         )
         self.flow_demand = FlowDemandEstimator(
             ewma_alpha=(
@@ -118,7 +135,7 @@ class ACOSDNController(app_manager.RyuApp):
         )
         self._pending_migrations: dict[str, tuple] = {}
         self._pending_flow_transactions: dict[
-            tuple[str, str], str
+            tuple, str
         ] = {}
         self.flow_registry = FlowRegistry()
         self.control_settings = load_control_settings()
@@ -198,6 +215,7 @@ class ACOSDNController(app_manager.RyuApp):
         datapath = ev.msg.datapath
         self.topology.add_switch(datapath.id)
         self._install_table_miss(datapath)
+        self._request_port_desc(datapath)
         self.logger.info("switch connected: dpid=%s", datapath.id)
 
     def _install_table_miss(self, datapath) -> None:
@@ -270,6 +288,11 @@ class ACOSDNController(app_manager.RyuApp):
         ):
             self._finalize_route_transaction(result, now)
         metrics = self._current_metrics(now)
+        self.telemetry_history.append(
+            observed_at=wall_now,
+            topology_generation=self.topology.generation,
+            metrics=metrics,
+        )
         self.learning_dataset.settle_due(
             observed_at=wall_now,
             flows=self.flow_registry.flows,
@@ -391,6 +414,11 @@ class ACOSDNController(app_manager.RyuApp):
                 link_capacity_bps=(
                     self.telemetry_settings.link_capacity_bps
                 ),
+                link_capacities_bps=(
+                    self.telemetry.link_capacities(
+                        self.topology
+                    )
+                ),
             )
             proposal = MigrationProposal.from_plan(
                 migration,
@@ -491,6 +519,7 @@ class ACOSDNController(app_manager.RyuApp):
                     destination_host_port=(
                         flow.destination_host_port
                     ),
+                    selector=flow.selector,
                 )
                 old_rules = build_bidirectional_plan(
                     topology=self.topology,
@@ -501,6 +530,7 @@ class ACOSDNController(app_manager.RyuApp):
                     destination_host_port=(
                         flow.destination_host_port
                     ),
+                    selector=flow.selector,
                 )
                 transaction_id = (
                     f"{proposal.proposal_id}-"
@@ -657,6 +687,40 @@ class ACOSDNController(app_manager.RyuApp):
         datapath.send_msg(request)
 
     @staticmethod
+    def _request_port_desc(datapath) -> None:
+        datapath.send_msg(
+            datapath.ofproto_parser.OFPPortDescStatsRequest(
+                datapath, 0
+            )
+        )
+
+    @set_ev_cls(
+        ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER
+    )
+    def port_desc_reply_handler(self, ev) -> None:
+        datapath = ev.msg.datapath
+        updated = 0
+        for port in ev.msg.body:
+            if port.port_no == datapath.ofproto.OFPP_LOCAL:
+                continue
+            speed_kbps = (
+                port.curr_speed
+                if port.curr_speed > 0
+                else port.max_speed
+            )
+            if self.telemetry.update_capacity(
+                datapath.id,
+                port.port_no,
+                float(speed_kbps) * 1000.0,
+            ):
+                updated += 1
+        self.logger.info(
+            "port capacities discovered: dpid=%s ports=%s",
+            datapath.id,
+            updated,
+        )
+
+    @staticmethod
     def _request_flow_stats(datapath) -> None:
         datapath.send_msg(
             datapath.ofproto_parser.OFPFlowStatsRequest(
@@ -764,6 +828,13 @@ class ACOSDNController(app_manager.RyuApp):
             source_mac = str(source_mac).lower()
             destination_mac = str(destination_mac).lower()
             for flow in self.flow_registry.flows:
+                selector_matches = (
+                    flow.selector is None
+                    or flow.selector.matches(stat.match)
+                    or flow.selector.reverse().matches(
+                        stat.match
+                    )
+                )
                 forward_ingress = (
                     datapath.id == flow.source_dpid
                     and source_mac == flow.source_mac
@@ -775,7 +846,12 @@ class ACOSDNController(app_manager.RyuApp):
                     and source_mac == flow.destination_mac
                     and destination_mac == flow.source_mac
                 )
-                if not (forward_ingress or reverse_ingress):
+                if (
+                    not selector_matches
+                    or not (
+                        forward_ingress or reverse_ingress
+                    )
+                ):
                     continue
                 self.flow_demand.update(
                     source_mac,
@@ -904,6 +980,7 @@ class ACOSDNController(app_manager.RyuApp):
 
         try:
             metrics = self._current_metrics()
+            selector = self._flow_selector(parsed, frame)
             decision = self.routing.select_path(
                 self.topology,
                 metrics,
@@ -917,6 +994,7 @@ class ACOSDNController(app_manager.RyuApp):
                 destination_mac=frame.dst,
                 source_host_port=in_port,
                 destination_host_port=destination.port,
+                selector=selector,
             )
             self.flow_manager.install(self.datapaths, rules)
             self.flow_registry.register_initial(
@@ -930,6 +1008,7 @@ class ACOSDNController(app_manager.RyuApp):
                     path=decision.path,
                     installed_cost=decision.cost,
                     last_reroute_at=time.monotonic(),
+                    selector=selector,
                 )
             )
             first_forward_rule = next(
@@ -976,6 +1055,7 @@ class ACOSDNController(app_manager.RyuApp):
                     destination_host_port=(
                         flow.destination_host_port
                     ),
+                    selector=flow.selector,
                 )
                 self.flow_manager.delete(self.datapaths, rules)
             except KeyError as exc:
@@ -1003,9 +1083,24 @@ class ACOSDNController(app_manager.RyuApp):
         destination_mac = msg.match.get("eth_dst")
         if source_mac is None or destination_mac is None:
             return
-        removed = self.flow_registry.remove_by_macs(
-            source_mac,
-            destination_mac,
+        match = {
+            name: msg.match.get(name)
+            for name in (
+                "eth_src",
+                "eth_dst",
+                "eth_type",
+                "ipv4_src",
+                "ipv4_dst",
+                "ip_proto",
+                "tcp_src",
+                "tcp_dst",
+                "udp_src",
+                "udp_dst",
+            )
+            if msg.match.get(name) is not None
+        }
+        removed = self.flow_registry.remove_by_match(
+            match
         )
         if removed is not None:
             self.logger.info(
@@ -1013,6 +1108,40 @@ class ACOSDNController(app_manager.RyuApp):
                 removed.source_mac,
                 removed.destination_mac,
             )
+
+    @staticmethod
+    def _flow_selector(
+        parsed: packet.Packet,
+        frame: ethernet.ethernet,
+    ) -> FlowSelector:
+        network = parsed.get_protocol(ipv4.ipv4)
+        tcp_segment = parsed.get_protocol(tcp.tcp)
+        udp_datagram = parsed.get_protocol(udp.udp)
+        transport = tcp_segment or udp_datagram
+        return FlowSelector(
+            source_mac=frame.src,
+            destination_mac=frame.dst,
+            eth_type=frame.ethertype,
+            ipv4_source=(
+                network.src if network is not None else None
+            ),
+            ipv4_destination=(
+                network.dst if network is not None else None
+            ),
+            ip_protocol=(
+                network.proto if network is not None else None
+            ),
+            source_port=(
+                transport.src_port
+                if transport is not None
+                else None
+            ),
+            destination_port=(
+                transport.dst_port
+                if transport is not None
+                else None
+            ),
+        )
 
     @staticmethod
     def _send_packet_out(msg, in_port: int, out_port: int) -> None:

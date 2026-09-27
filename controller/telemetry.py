@@ -29,6 +29,8 @@ class PortTelemetry:
     utilization: float
     loss: float
     observed_at: float
+    capacity_bps: float
+    capacity_source: str
 
 
 class TelemetryCollector:
@@ -47,6 +49,42 @@ class TelemetryCollector:
         self.max_age_seconds = max_age_seconds
         self._previous: dict[tuple[int, int], PortCounters] = {}
         self._telemetry: dict[tuple[int, int], PortTelemetry] = {}
+        self._capacities: dict[
+            tuple[int, int], tuple[float, str]
+        ] = {}
+
+    def update_capacity(
+        self,
+        dpid: int,
+        port: int,
+        capacity_bps: float,
+        source: str = "openflow_port_desc",
+    ) -> bool:
+        if capacity_bps <= 0:
+            return False
+        self._capacities[(dpid, port)] = (
+            float(capacity_bps),
+            source,
+        )
+        return True
+
+    def port_capacity(
+        self, dpid: int, port: int
+    ) -> tuple[float, str]:
+        return self._capacities.get(
+            (dpid, port),
+            (self.link_capacity_bps, "configured_default"),
+        )
+
+    def link_capacities(
+        self, topology: TopologyManager
+    ) -> dict[tuple[int, int], float]:
+        return {
+            edge: self.port_capacity(
+                edge[0], ports.source_port
+            )[0]
+            for edge, ports in topology.links.items()
+        }
 
     def update(
         self,
@@ -93,8 +131,11 @@ class TelemetryCollector:
         tx_dropped = counters.tx_dropped - previous.tx_dropped
         rx_bps = rx_bytes * 8.0 / elapsed
         tx_bps = tx_bytes * 8.0 / elapsed
+        capacity_bps, capacity_source = self.port_capacity(
+            dpid, port
+        )
         utilization = min(
-            max(rx_bps, tx_bps) / self.link_capacity_bps,
+            max(rx_bps, tx_bps) / capacity_bps,
             1.0,
         )
         attempted_packets = tx_packets + tx_dropped
@@ -109,6 +150,8 @@ class TelemetryCollector:
             utilization=utilization,
             loss=min(loss, 1.0),
             observed_at=counters.observed_at,
+            capacity_bps=capacity_bps,
+            capacity_source=capacity_source,
         )
         self._telemetry[key] = result
         return result
@@ -142,11 +185,21 @@ class TelemetryCollector:
                 now=current_time,
             )
             if telemetry is None:
-                result[edge] = LinkMetrics(available=False)
+                result[edge] = LinkMetrics(
+                    available=False,
+                    confidence=0.0,
+                    provenance="missing_or_stale_port_stats",
+                )
             else:
                 result[edge] = LinkMetrics(
                     utilization=telemetry.utilization,
                     loss=telemetry.loss,
                     available=True,
+                    observed_at=telemetry.observed_at,
+                    confidence=0.8,
+                    provenance=(
+                        "openflow_port_stats:"
+                        f"{telemetry.capacity_source}"
+                    ),
                 )
         return result

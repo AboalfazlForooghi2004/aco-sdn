@@ -134,6 +134,24 @@ class WhatIfSimulatorTests(unittest.TestCase):
             result.warnings,
         )
 
+    def test_per_link_capacity_changes_projection(self) -> None:
+        result = self.simulator.compare(
+            self.topology,
+            self.metrics,
+            current_path=(1, 2, 4),
+            proposed_path=(1, 3, 4),
+            flow_demand_bps=8_000_000,
+            link_capacities_bps={
+                (1, 3): 10_000_000,
+                (3, 4): 100_000_000,
+            },
+        )
+
+        self.assertFalse(result.safe_to_apply)
+        self.assertIn(
+            "per_link_capacity_used", result.warnings
+        )
+
     def test_different_endpoints_are_blocked(self) -> None:
         result = self.simulator.compare(
             self.topology,
