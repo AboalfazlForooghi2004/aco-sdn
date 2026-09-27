@@ -12,6 +12,7 @@ class CostWeights:
     loss: float = 0.25
     hop: float = 0.15
     latency_reference_ms: float = 100.0
+    unknown_latency_penalty: float = 0.5
 
     def __post_init__(self) -> None:
         total = self.latency + self.utilization + self.loss + self.hop
@@ -19,14 +20,24 @@ class CostWeights:
             raise ValueError("cost weights must sum to 1.0")
         if self.latency_reference_ms <= 0:
             raise ValueError("latency_reference_ms must be positive")
+        if not 0.0 <= self.unknown_latency_penalty <= 1.0:
+            raise ValueError(
+                "unknown_latency_penalty must be between 0 and 1"
+            )
 
 
 def link_cost(metrics: LinkMetrics, weights: CostWeights) -> float:
     """Return a normalized positive cost."""
     if not metrics.available:
         return float("inf")
-    normalized_latency = min(
-        metrics.latency_ms / weights.latency_reference_ms, 1.0
+    normalized_latency = (
+        min(
+            metrics.latency_ms
+            / weights.latency_reference_ms,
+            1.0,
+        )
+        if metrics.latency_known
+        else weights.unknown_latency_penalty
     )
     return max(
         1e-9,

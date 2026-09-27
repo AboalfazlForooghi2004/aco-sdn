@@ -23,6 +23,9 @@ class TelemetrySettings:
     history_path: str
     history_interval_seconds: float
     history_max_records: int
+    port_capacity_overrides_bps: dict[
+        tuple[int, int], float
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +63,7 @@ class LearningSettings:
 @dataclass(frozen=True, slots=True)
 class TransactionSettings:
     timeout_seconds: float
+    journal_path: str
 
 
 def _config_path(path: str | Path | None) -> Path:
@@ -82,6 +86,12 @@ def load_telemetry_settings(
 ) -> TelemetrySettings:
     document = _load_document(path)
     telemetry = document["telemetry"]
+    overrides = {}
+    for key, value in telemetry.get(
+        "port_capacity_overrides_bps", {}
+    ).items():
+        dpid, port = str(key).split(":", maxsplit=1)
+        overrides[(int(dpid), int(port))] = float(value)
     return TelemetrySettings(
         poll_interval_seconds=float(
             telemetry["poll_interval_seconds"]
@@ -101,6 +111,7 @@ def load_telemetry_settings(
         history_max_records=int(
             telemetry["history_max_records"]
         ),
+        port_capacity_overrides_bps=overrides,
     )
 
 
@@ -135,6 +146,9 @@ def load_optimizer(
             hop=float(cost["hop"]),
             latency_reference_ms=float(
                 cost["latency_reference_ms"]
+            ),
+            unknown_latency_penalty=float(
+                cost["unknown_latency_penalty"]
             ),
         ),
     )
@@ -171,7 +185,12 @@ def load_transaction_settings(
         raise ValueError(
             "transaction_timeout_seconds must be positive"
         )
-    return TransactionSettings(timeout_seconds=timeout)
+    return TransactionSettings(
+        timeout_seconds=timeout,
+        journal_path=str(
+            rerouting["transaction_journal_path"]
+        ),
+    )
 
 
 def load_prediction_config(

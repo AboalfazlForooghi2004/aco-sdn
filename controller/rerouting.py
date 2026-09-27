@@ -56,6 +56,8 @@ class ActiveFlow:
     installed_cost: float
     last_reroute_at: float
     selector: FlowSelector | None = None
+    route_generation: int = 1
+    expected_rule_count: int = 0
 
     @property
     def key(self) -> tuple:
@@ -84,6 +86,15 @@ class FlowRegistry:
 
     def __init__(self) -> None:
         self._flows: dict[tuple, ActiveFlow] = {}
+        self._removed_rules: dict[
+            tuple[tuple, int], set[tuple]
+        ] = {}
+
+    def next_route_generation(self, key: tuple) -> int:
+        current = self._flows.get(key)
+        if current is None:
+            return 1
+        return current.route_generation + 1
 
     def register_initial(self, flow: ActiveFlow) -> ActiveFlow:
         existing = self._flows.get(flow.key)
@@ -97,6 +108,7 @@ class FlowRegistry:
         flow: ActiveFlow,
         decision: RoutingDecision,
         changed_at: float,
+        route_generation: int | None = None,
     ) -> ActiveFlow:
         updated = ActiveFlow(
             source_mac=flow.source_mac,
@@ -109,12 +121,24 @@ class FlowRegistry:
             installed_cost=decision.cost,
             last_reroute_at=changed_at,
             selector=flow.selector,
+            route_generation=(
+                flow.route_generation + 1
+                if route_generation is None
+                else route_generation
+            ),
+            expected_rule_count=2 * len(decision.path),
         )
         self._flows[updated.key] = updated
+        self._removed_rules.pop(
+            (flow.key, flow.route_generation), None
+        )
         return updated
 
     def remove(self, flow: ActiveFlow) -> None:
         self._flows.pop(flow.key, None)
+        self._removed_rules.pop(
+            (flow.key, flow.route_generation), None
+        )
 
     def remove_by_macs(
         self, source_mac: str, destination_mac: str
@@ -144,6 +168,46 @@ class FlowRegistry:
         if source is None or destination is None:
             return None
         return self.remove_by_macs(str(source), str(destination))
+
+    def mark_rule_removed(
+        self,
+        *,
+        match: dict[str, object],
+        cookie: int,
+        dpid: int,
+        route_generation: int | None,
+    ) -> ActiveFlow | None:
+        selector = FlowSelector.from_match(match)
+        flow = (
+            self._flows.get(selector.key)
+            if selector is not None
+            else None
+        )
+        if flow is None:
+            return None
+        if (
+            route_generation is not None
+            and route_generation != flow.route_generation
+        ):
+            return None
+        token = (
+            dpid,
+            tuple(
+                sorted(
+                    (name, str(value))
+                    for name, value in match.items()
+                )
+            ),
+            cookie,
+        )
+        key = (flow.key, flow.route_generation)
+        removed = self._removed_rules.setdefault(key, set())
+        removed.add(token)
+        expected = max(flow.expected_rule_count, 1)
+        if len(removed) < expected:
+            return None
+        self.remove(flow)
+        return flow
 
     def flows_for_host(self, mac: str) -> tuple[ActiveFlow, ...]:
         normalized = mac.lower()

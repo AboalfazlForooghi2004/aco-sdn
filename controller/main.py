@@ -67,6 +67,7 @@ from controller.state import (
 )
 from controller.telemetry import PortCounters, TelemetryCollector
 from controller.telemetry_history import TelemetryHistory
+from controller.transaction_journal import TransactionJournal
 from controller.topology import TopologyManager
 from controller.transactions import (
     RouteTransactionManager,
@@ -96,6 +97,10 @@ class ACOSDNController(app_manager.RyuApp):
             ),
             max_age_seconds=(
                 self.telemetry_settings.max_age_seconds
+            ),
+            capacity_overrides_bps=(
+                self.telemetry_settings
+                .port_capacity_overrides_bps
             ),
         )
         self.telemetry_history = TelemetryHistory(
@@ -129,9 +134,16 @@ class ACOSDNController(app_manager.RyuApp):
         )
         self.flow_manager = FlowManager()
         transaction_settings = load_transaction_settings()
+        self.transaction_journal = TransactionJournal(
+            transaction_settings.journal_path
+        )
+        self._recovered_unresolved_transactions = (
+            self.transaction_journal.unresolved()
+        )
         self.route_transactions = RouteTransactionManager(
             self.flow_manager,
             transaction_settings.timeout_seconds,
+            journal=self.transaction_journal,
         )
         self._pending_migrations: dict[str, tuple] = {}
         self._pending_flow_transactions: dict[
@@ -159,6 +171,21 @@ class ACOSDNController(app_manager.RyuApp):
                 "mode": self.control_settings.mode.value
             },
         )
+        if self._recovered_unresolved_transactions:
+            self.event_timeline.append(
+                occurred_at=time.time(),
+                category="controller",
+                severity="warning",
+                title="Unfinished route transactions recovered",
+                details={
+                    "transaction_ids": list(
+                        self._recovered_unresolved_transactions
+                    ),
+                    "action": (
+                        "purge managed rules as switches reconnect"
+                    ),
+                },
+            )
         self.snapshot_store = SnapshotStore(
             self.control_settings.mode
         )
@@ -214,6 +241,8 @@ class ACOSDNController(app_manager.RyuApp):
     def switch_features_handler(self, ev) -> None:
         datapath = ev.msg.datapath
         self.topology.add_switch(datapath.id)
+        self.flow_manager.purge_managed(datapath)
+        self.flow_manager.request_barrier(datapath)
         self._install_table_miss(datapath)
         self._request_port_desc(datapath)
         self.logger.info("switch connected: dpid=%s", datapath.id)
@@ -402,9 +431,8 @@ class ACOSDNController(app_manager.RyuApp):
                 flow_demand_bps=(
                     demand.bits_per_second
                     if (
-                        demand := self.flow_demand.get(
-                            flow.source_mac,
-                            flow.destination_mac,
+                        demand := self.flow_demand.get_key(
+                            flow.key,
                             now,
                         )
                     )
@@ -510,6 +538,9 @@ class ACOSDNController(app_manager.RyuApp):
                 )
                 continue
             try:
+                new_route_generation = (
+                    flow.route_generation + 1
+                )
                 new_rules = build_bidirectional_plan(
                     topology=self.topology,
                     path=migration.decision.path,
@@ -520,6 +551,9 @@ class ACOSDNController(app_manager.RyuApp):
                         flow.destination_host_port
                     ),
                     selector=flow.selector,
+                    cookie=self.flow_manager.cookie_for(
+                        flow.key, new_route_generation
+                    ),
                 )
                 old_rules = build_bidirectional_plan(
                     topology=self.topology,
@@ -531,6 +565,9 @@ class ACOSDNController(app_manager.RyuApp):
                         flow.destination_host_port
                     ),
                     selector=flow.selector,
+                    cookie=self.flow_manager.cookie_for(
+                        flow.key, flow.route_generation
+                    ),
                 )
                 transaction_id = (
                     f"{proposal.proposal_id}-"
@@ -553,6 +590,7 @@ class ACOSDNController(app_manager.RyuApp):
                     flow,
                     migration,
                     proposal,
+                    new_route_generation,
                 )
                 self._pending_flow_transactions[
                     flow.key
@@ -617,6 +655,7 @@ class ACOSDNController(app_manager.RyuApp):
             xid=ev.msg.xid,
             current_generation=self.topology.generation,
             datapaths=self.datapaths,
+            now=time.monotonic(),
         )
         if result is not None:
             self._finalize_route_transaction(
@@ -633,13 +672,19 @@ class ACOSDNController(app_manager.RyuApp):
         )
         if context is None:
             return
-        flow, migration, proposal = context
+        (
+            flow,
+            migration,
+            proposal,
+            new_route_generation,
+        ) = context
         self._pending_flow_transactions.pop(flow.key, None)
         if result.status == "committed":
             self.flow_registry.replace(
                 flow,
                 migration.decision,
                 changed_at=now,
+                route_generation=new_route_generation,
             )
             self.logger.info(
                 "route transaction committed: id=%s "
@@ -827,7 +872,16 @@ class ACOSDNController(app_manager.RyuApp):
                 continue
             source_mac = str(source_mac).lower()
             destination_mac = str(destination_mac).lower()
+            decoded_cookie = self.flow_manager.decode_cookie(
+                int(getattr(stat, "cookie", 0))
+            )
             for flow in self.flow_registry.flows:
+                if (
+                    decoded_cookie is not None
+                    and decoded_cookie[0]
+                    != flow.route_generation
+                ):
+                    continue
                 selector_matches = (
                     flow.selector is None
                     or flow.selector.matches(stat.match)
@@ -853,9 +907,8 @@ class ACOSDNController(app_manager.RyuApp):
                     )
                 ):
                     continue
-                self.flow_demand.update(
-                    source_mac,
-                    destination_mac,
+                self.flow_demand.update_key(
+                    flow.key,
                     FlowCounters(
                         byte_count=stat.byte_count,
                         packet_count=stat.packet_count,
@@ -981,6 +1034,11 @@ class ACOSDNController(app_manager.RyuApp):
         try:
             metrics = self._current_metrics()
             selector = self._flow_selector(parsed, frame)
+            route_generation = (
+                self.flow_registry.next_route_generation(
+                    selector.key
+                )
+            )
             decision = self.routing.select_path(
                 self.topology,
                 metrics,
@@ -995,6 +1053,9 @@ class ACOSDNController(app_manager.RyuApp):
                 source_host_port=in_port,
                 destination_host_port=destination.port,
                 selector=selector,
+                cookie=self.flow_manager.cookie_for(
+                    selector.key, route_generation
+                ),
             )
             self.flow_manager.install(self.datapaths, rules)
             self.flow_registry.register_initial(
@@ -1009,6 +1070,8 @@ class ACOSDNController(app_manager.RyuApp):
                     installed_cost=decision.cost,
                     last_reroute_at=time.monotonic(),
                     selector=selector,
+                    route_generation=route_generation,
+                    expected_rule_count=len(rules),
                 )
             )
             first_forward_rule = next(
@@ -1056,6 +1119,9 @@ class ACOSDNController(app_manager.RyuApp):
                         flow.destination_host_port
                     ),
                     selector=flow.selector,
+                    cookie=self.flow_manager.cookie_for(
+                        flow.key, flow.route_generation
+                    ),
                 )
                 self.flow_manager.delete(self.datapaths, rules)
             except KeyError as exc:
@@ -1099,8 +1165,14 @@ class ACOSDNController(app_manager.RyuApp):
             )
             if msg.match.get(name) is not None
         }
-        removed = self.flow_registry.remove_by_match(
-            match
+        decoded = self.flow_manager.decode_cookie(msg.cookie)
+        removed = self.flow_registry.mark_rule_removed(
+            match=match,
+            cookie=msg.cookie,
+            dpid=msg.datapath.id,
+            route_generation=(
+                decoded[0] if decoded is not None else None
+            ),
         )
         if removed is not None:
             self.logger.info(

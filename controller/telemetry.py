@@ -40,6 +40,9 @@ class TelemetryCollector:
         self,
         link_capacity_bps: float,
         max_age_seconds: float,
+        capacity_overrides_bps: (
+            dict[tuple[int, int], float] | None
+        ) = None,
     ) -> None:
         if link_capacity_bps <= 0:
             raise ValueError("link_capacity_bps must be positive")
@@ -51,7 +54,13 @@ class TelemetryCollector:
         self._telemetry: dict[tuple[int, int], PortTelemetry] = {}
         self._capacities: dict[
             tuple[int, int], tuple[float, str]
-        ] = {}
+        ] = {
+            key: (float(value), "configured_override")
+            for key, value in (
+                capacity_overrides_bps or {}
+            ).items()
+            if value > 0
+        }
 
     def update_capacity(
         self,
@@ -61,6 +70,13 @@ class TelemetryCollector:
         source: str = "openflow_port_desc",
     ) -> bool:
         if capacity_bps <= 0:
+            return False
+        existing = self._capacities.get((dpid, port))
+        if (
+            existing is not None
+            and existing[1] == "configured_override"
+            and source != "configured_override"
+        ):
             return False
         self._capacities[(dpid, port)] = (
             float(capacity_bps),
@@ -187,16 +203,29 @@ class TelemetryCollector:
             if telemetry is None:
                 result[edge] = LinkMetrics(
                     available=False,
+                    latency_known=False,
                     confidence=0.0,
                     provenance="missing_or_stale_port_stats",
                 )
             else:
                 result[edge] = LinkMetrics(
+                    latency_known=False,
                     utilization=telemetry.utilization,
                     loss=telemetry.loss,
                     available=True,
                     observed_at=telemetry.observed_at,
-                    confidence=0.8,
+                    confidence=max(
+                        0.0,
+                        0.8
+                        * (
+                            1.0
+                            - (
+                                current_time
+                                - telemetry.observed_at
+                            )
+                            / self.max_age_seconds
+                        ),
+                    ),
                     provenance=(
                         "openflow_port_stats:"
                         f"{telemetry.capacity_source}"

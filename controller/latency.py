@@ -160,6 +160,7 @@ class LatencyTracker:
                 else replace(
                     link,
                     latency_ms=latency_ms,
+                    latency_known=True,
                     confidence=min(link.confidence, 0.7),
                     provenance=(
                         f"{link.provenance}+active_probe"

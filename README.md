@@ -29,6 +29,12 @@ and the initial Ryu discovery adapter:
   five-tuple OpenFlow matches and MAC-only compatibility.
 - interval-limited durable telemetry history with topology generation,
   metric provenance, confidence, and bounded compaction.
+- generation-aware OpenFlow cookies, rule-level expiry accounting,
+  persistent transaction journal, startup stale-rule reconciliation,
+  and Barrier-verified rollback.
+- five-tuple-aware flow-demand estimation, explicit per-port capacity
+  overrides, freshness-derived confidence, and an unknown-latency
+  routing penalty.
 
 Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and

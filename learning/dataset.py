@@ -42,11 +42,73 @@ class LearningDataset:
         self._lock = threading.RLock()
         self._pending: dict[str, PendingDecision] = {}
         self._recorded: set[str] = set()
+        self._load_existing()
 
     @property
     def pending_count(self) -> int:
         with self._lock:
             return len(self._pending)
+
+    def _load_existing(self) -> None:
+        if not self.enabled or not self.path.exists():
+            return
+        decisions: dict[str, dict[str, Any]] = {}
+        outcomes: set[str] = set()
+        with self.path.open(encoding="utf-8") as records:
+            for line in records:
+                try:
+                    record = json.loads(line)
+                    decision_id = str(record["decision_id"])
+                    if record["record_type"] == "decision":
+                        decisions[decision_id] = record
+                    elif record["record_type"] == "outcome":
+                        outcomes.add(decision_id)
+                except (
+                    json.JSONDecodeError,
+                    KeyError,
+                    TypeError,
+                ):
+                    continue
+        self._recorded.update(decisions)
+        for decision_id, record in decisions.items():
+            if decision_id in outcomes:
+                continue
+            try:
+                observed_at = float(record["observed_at"])
+                self._pending[decision_id] = PendingDecision(
+                    decision_id=decision_id,
+                    observed_at=observed_at,
+                    due_at=(
+                        observed_at
+                        + self.outcome_horizon_seconds
+                    ),
+                    flow_key=self._freeze(
+                        record["flow_key"]
+                    ),
+                    current_path=tuple(
+                        int(node)
+                        for node in record["current_path"]
+                    ),
+                    candidate_path=tuple(
+                        int(node)
+                        for node in record["candidate_path"]
+                    ),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    @classmethod
+    def _freeze(cls, value):
+        if isinstance(value, list):
+            return tuple(cls._freeze(item) for item in value)
+        if isinstance(value, dict):
+            return tuple(
+                sorted(
+                    (key, cls._freeze(item))
+                    for key, item in value.items()
+                )
+            )
+        return value
 
     def record_decision(
         self,
