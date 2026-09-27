@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from aco.cost import CostWeights, path_cost
@@ -66,9 +66,18 @@ def evaluate_scenario(
             scenario.destination,
             weights,
         ),
-        "aco": lambda: list(
+        "aco_ant_system": lambda: list(
             AntColonyOptimizer(
-                aco_config, weights
+                replace(aco_config, strategy="ant_system"), weights
+            ).optimize(
+                scenario.graph,
+                scenario.source,
+                scenario.destination,
+            ).path
+        ),
+        "aco_mmas": lambda: list(
+            AntColonyOptimizer(
+                replace(aco_config, strategy="mmas"), weights
             ).optimize(
                 scenario.graph,
                 scenario.source,

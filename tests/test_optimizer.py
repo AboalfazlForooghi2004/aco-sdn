@@ -46,6 +46,31 @@ class OptimizerTests(unittest.TestCase):
         result = optimizer.optimize(graph, "s1", "s4")
         self.assertEqual(result.path, ("s1", "s2", "s4"))
 
+    def test_mmas_reports_stagnation_and_bounded_restart(self) -> None:
+        graph = self.build_graph()
+        optimizer = AntColonyOptimizer(
+            ACOConfig(
+                strategy="mmas",
+                ants=20,
+                iterations=50,
+                stagnation_iterations=3,
+                max_restarts=1,
+                seed=7,
+            )
+        )
+
+        result = optimizer.optimize(graph, "s1", "s4")
+
+        self.assertEqual(result.path, ("s1", "s3", "s4"))
+        self.assertEqual(result.strategy, "mmas")
+        self.assertEqual(result.restarts, 1)
+        self.assertEqual(result.convergence_reason, "stagnation")
+        self.assertLess(result.iterations_run, 50)
+
+    def test_invalid_strategy_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            ACOConfig(strategy="unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

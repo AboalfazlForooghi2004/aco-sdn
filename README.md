@@ -12,7 +12,10 @@ and the initial Ryu discovery adapter:
 - directed graph with validated latency, utilization, loss, and
   availability metrics;
 - normalized multi-criteria cost function;
-- seeded, loop-free ACO optimizer with pheromone evaporation/deposit;
+- seeded, loop-free ACO optimizer with selectable Ant System or
+  Max-Min Ant System (MMAS);
+- bounded MMAS pheromones, best-so-far reinforcement, stagnation
+  detection, and deterministic restart/early-stop diagnostics;
 - deterministic minimum-cost fallback;
 - six-switch multipath Mininet topology;
 - unit tests for congestion-aware selection and failed-link exclusion.
@@ -112,12 +115,13 @@ include scheduling, OpenFlow channel, and Packet-In processing noise.
 
 ## Offline reproducible experiments
 
-The offline runner compares three algorithms on the same six-switch
+The offline runner compares four algorithms on the same six-switch
 graph:
 
 - minimum-hop shortest path;
 - deterministic minimum dynamic cost;
-- seeded ACO.
+- classic seeded Ant System;
+- seeded Max-Min Ant System (MMAS).
 
 Included scenarios are normal operation, congestion, increased
 latency, packet loss, and link failure. Run:
