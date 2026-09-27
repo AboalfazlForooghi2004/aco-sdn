@@ -10,4 +10,4 @@ requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]
 
 [tool.setuptools]
-packages = ["aco", "controller"]
+packages = ["aco", "controller", "experiments"]

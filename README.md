@@ -90,6 +90,29 @@ corresponding active-flow record, while controller-initiated deletion
 events are ignored. When a host moves, all tracked paths involving its
 MAC address are explicitly removed before a new route is learned.
 
+## Offline reproducible experiments
+
+The offline runner compares three algorithms on the same six-switch
+graph:
+
+- minimum-hop shortest path;
+- deterministic minimum dynamic cost;
+- seeded ACO.
+
+Included scenarios are normal operation, congestion, increased
+latency, packet loss, and link failure. Run:
+
+```bash
+python -m experiments.run \
+  --output results/offline_comparison.csv
+```
+
+The CSV contains the selected path, normalized path cost, accumulated
+latency, average utilization, end-to-end packet-loss estimate,
+algorithm execution time, and random seed. These are synthetic
+repeatable inputs for validating decision logic; they are not Mininet
+performance measurements.
+
 ## Cost model
 
 ```text
@@ -105,10 +128,10 @@ milliseconds.
 
 ## Roadmap
 
-1. latency measurement and flow-stat correlation
-2. repeatable congestion and link-failure scenario runners
-3. CSV experiment results and baseline comparison
-4. integration validation on Ubuntu/Mininet/OVS
+1. active link-latency measurement and flow-stat correlation
+2. Mininet congestion and link-failure scenario automation
+3. integration validation on Ubuntu/Mininet/OVS
+4. charts generated from measured experiment CSV files
 
 ## Status
 
