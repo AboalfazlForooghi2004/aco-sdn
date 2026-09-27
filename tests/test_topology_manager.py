@@ -5,6 +5,23 @@ from controller.topology import TopologyManager
 
 
 class TopologyManagerTests(unittest.TestCase):
+    def test_generation_changes_only_for_state_changes(self) -> None:
+        topology = TopologyManager()
+        self.assertEqual(topology.generation, 0)
+
+        topology.add_switch(1)
+        first = topology.generation
+        topology.add_switch(1)
+        self.assertEqual(topology.generation, first)
+
+        topology.add_link(1, 2, 12, 21)
+        after_link = topology.generation
+        topology.add_link(1, 2, 12, 21)
+        self.assertEqual(topology.generation, after_link)
+
+        topology.remove_link(1, 2)
+        self.assertGreater(topology.generation, after_link)
+
     def test_directed_links_and_ports_are_recorded(self) -> None:
         topology = TopologyManager()
         topology.add_link(1, 2, 11, 22)

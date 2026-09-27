@@ -144,3 +144,21 @@ class FlowManager:
                     match=match,
                 )
             )
+
+    @staticmethod
+    def request_barrier(datapath) -> int:
+        request = datapath.ofproto_parser.OFPBarrierRequest(
+            datapath
+        )
+        if (
+            getattr(request, "xid", None) is None
+            and hasattr(datapath, "set_xid")
+        ):
+            datapath.set_xid(request)
+        datapath.send_msg(request)
+        xid = getattr(request, "xid", None)
+        if xid is None:
+            raise ValueError(
+                "datapath did not assign an xid to barrier request"
+            )
+        return int(xid)

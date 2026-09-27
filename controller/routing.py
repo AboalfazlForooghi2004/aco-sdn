@@ -14,6 +14,7 @@ class RoutingDecision:
     path: tuple[int, ...]
     cost: float
     used_fallback: bool
+    topology_generation: int = 0
 
 
 class RoutingService:
@@ -35,6 +36,7 @@ class RoutingService:
                 path=(source_dpid,),
                 cost=0.0,
                 used_fallback=False,
+                topology_generation=topology.generation,
             )
 
         graph = topology.build_graph(metrics)
@@ -48,6 +50,7 @@ class RoutingService:
                 path=tuple(int(node) for node in result.path),
                 cost=result.cost,
                 used_fallback=result.used_fallback,
+                topology_generation=topology.generation,
             )
         except ValueError:
             if not allow_topology_fallback:
@@ -72,6 +75,7 @@ class RoutingService:
                     self.optimizer.weights,
                 ),
                 used_fallback=True,
+                topology_generation=topology.generation,
             )
 
     @staticmethod

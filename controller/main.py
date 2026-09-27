@@ -49,6 +49,7 @@ from controller.settings import (
     load_reroute_policy,
     load_simulation_settings,
     load_telemetry_settings,
+    load_transaction_settings,
 )
 from controller.state import (
     MigrationProposal,
@@ -57,6 +58,11 @@ from controller.state import (
 )
 from controller.telemetry import PortCounters, TelemetryCollector
 from controller.topology import TopologyManager
+from controller.transactions import (
+    RouteTransactionManager,
+    StaleTopologyError,
+    TransactionResult,
+)
 from prediction.engine import PredictionEngine
 from recommendation.engine import RecommendationEngine
 from learning.dataset import LearningDataset
@@ -105,6 +111,15 @@ class ACOSDNController(app_manager.RyuApp):
             ),
         )
         self.flow_manager = FlowManager()
+        transaction_settings = load_transaction_settings()
+        self.route_transactions = RouteTransactionManager(
+            self.flow_manager,
+            transaction_settings.timeout_seconds,
+        )
+        self._pending_migrations: dict[str, tuple] = {}
+        self._pending_flow_transactions: dict[
+            tuple[str, str], str
+        ] = {}
         self.flow_registry = FlowRegistry()
         self.control_settings = load_control_settings()
         learning_settings = load_learning_settings()
@@ -248,6 +263,12 @@ class ACOSDNController(app_manager.RyuApp):
     def _run_control_cycle(self) -> None:
         now = time.monotonic()
         wall_now = time.time()
+        for result in self.route_transactions.expire(
+            now=now,
+            current_generation=self.topology.generation,
+            datapaths=self.datapaths,
+        ):
+            self._finalize_route_transaction(result, now)
         metrics = self._current_metrics(now)
         self.learning_dataset.settle_due(
             observed_at=wall_now,
@@ -340,6 +361,8 @@ class ACOSDNController(app_manager.RyuApp):
             return ()
         proposals = []
         for flow in self.flow_registry.flows:
+            if flow.key in self._pending_flow_transactions:
+                continue
             migration = self.reroute_manager.evaluate(
                 flow,
                 self.topology,
@@ -479,54 +502,64 @@ class ACOSDNController(app_manager.RyuApp):
                         flow.destination_host_port
                     ),
                 )
-                # Make-before-break: add/modify the new path first.
-                self.flow_manager.install(
-                    self.datapaths,
-                    new_rules,
+                transaction_id = (
+                    f"{proposal.proposal_id}-"
+                    f"{time.monotonic_ns()}"
                 )
-                self.flow_manager.delete(
-                    self.datapaths,
-                    old_rules,
-                    exclude_dpids=frozenset(
-                        migration.decision.path
+                self.route_transactions.begin(
+                    transaction_id=transaction_id,
+                    topology_generation=(
+                        migration.decision.topology_generation
                     ),
+                    current_generation=(
+                        self.topology.generation
+                    ),
+                    datapaths=self.datapaths,
+                    old_rules=old_rules,
+                    new_rules=new_rules,
+                    now=now,
                 )
-                self.flow_registry.replace(
+                self._pending_migrations[transaction_id] = (
                     flow,
-                    migration.decision,
-                    changed_at=now,
+                    migration,
+                    proposal,
                 )
+                self._pending_flow_transactions[
+                    flow.key
+                ] = transaction_id
                 self.logger.info(
-                    "flow rerouted: %s -> %s old=%s new=%s "
-                    "old_cost=%.4f new_cost=%.4f forced=%s",
+                    "route transaction started: id=%s "
+                    "%s -> %s old=%s new=%s generation=%s",
+                    transaction_id,
                     flow.source_mac,
                     flow.destination_mac,
                     flow.path,
                     migration.decision.path,
-                    migration.current_cost,
-                    migration.decision.cost,
-                    migration.forced,
+                    migration.decision.topology_generation,
                 )
                 self.event_timeline.append(
                     occurred_at=time.time(),
                     category="migration",
                     severity="info",
-                    title="Route migration applied",
+                    title="Route migration transaction started",
                     details={
+                        "transaction_id": transaction_id,
                         "proposal_id": proposal.proposal_id,
                         "old_path": list(flow.path),
                         "new_path": list(
                             migration.decision.path
                         ),
-                        "old_cost": (
-                            migration.current_cost
-                        ),
-                        "new_cost": (
-                            migration.decision.cost
+                        "topology_generation": (
+                            migration.decision
+                            .topology_generation
                         ),
                     },
                 )
-            except (KeyError, ValueError) as exc:
+            except (
+                KeyError,
+                ValueError,
+                StaleTopologyError,
+            ) as exc:
                 self.logger.warning(
                     "flow reroute failed: %s", exc
                 )
@@ -544,6 +577,74 @@ class ACOSDNController(app_manager.RyuApp):
             item.proposal_id for item in proposals
         }
         return tuple(proposals)
+
+    @set_ev_cls(
+        ofp_event.EventOFPBarrierReply, MAIN_DISPATCHER
+    )
+    def barrier_reply_handler(self, ev) -> None:
+        result = self.route_transactions.acknowledge(
+            dpid=ev.msg.datapath.id,
+            xid=ev.msg.xid,
+            current_generation=self.topology.generation,
+            datapaths=self.datapaths,
+        )
+        if result is not None:
+            self._finalize_route_transaction(
+                result, time.monotonic()
+            )
+
+    def _finalize_route_transaction(
+        self,
+        result: TransactionResult,
+        now: float,
+    ) -> None:
+        context = self._pending_migrations.pop(
+            result.transaction_id, None
+        )
+        if context is None:
+            return
+        flow, migration, proposal = context
+        self._pending_flow_transactions.pop(flow.key, None)
+        if result.status == "committed":
+            self.flow_registry.replace(
+                flow,
+                migration.decision,
+                changed_at=now,
+            )
+            self.logger.info(
+                "route transaction committed: id=%s "
+                "old=%s new=%s",
+                result.transaction_id,
+                flow.path,
+                migration.decision.path,
+            )
+            severity = "info"
+            title = "Route migration committed"
+        else:
+            self.logger.error(
+                "route transaction rolled back: id=%s "
+                "reason=%s",
+                result.transaction_id,
+                result.reason,
+            )
+            severity = "error"
+            title = "Route migration rolled back"
+        self.event_timeline.append(
+            occurred_at=time.time(),
+            category="migration",
+            severity=severity,
+            title=title,
+            details={
+                "transaction_id": result.transaction_id,
+                "proposal_id": proposal.proposal_id,
+                "status": result.status,
+                "reason": result.reason,
+                "old_path": list(flow.path),
+                "new_path": list(
+                    migration.decision.path
+                ),
+            },
+        )
 
     @staticmethod
     def _request_port_stats(datapath) -> None:
