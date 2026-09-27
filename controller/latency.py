@@ -157,7 +157,14 @@ class LatencyTracker:
             enriched[edge] = (
                 link
                 if latency_ms is None
-                else replace(link, latency_ms=latency_ms)
+                else replace(
+                    link,
+                    latency_ms=latency_ms,
+                    confidence=min(link.confidence, 0.7),
+                    provenance=(
+                        f"{link.provenance}+active_probe"
+                    ),
+                )
             )
         return enriched
 

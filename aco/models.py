@@ -12,6 +12,9 @@ class LinkMetrics:
     utilization: float = 0.0
     loss: float = 0.0
     available: bool = True
+    observed_at: float | None = None
+    confidence: float = 1.0
+    provenance: str = "configured_or_synthetic"
 
     def __post_init__(self) -> None:
         if self.latency_ms < 0:
@@ -20,6 +23,8 @@ class LinkMetrics:
             raise ValueError("utilization must be between 0 and 1")
         if not 0.0 <= self.loss <= 1.0:
             raise ValueError("loss must be between 0 and 1")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be between 0 and 1")
 
 
 class NetworkGraph:

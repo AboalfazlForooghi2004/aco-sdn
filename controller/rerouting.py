@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from aco.cost import path_cost
 from aco.models import LinkMetrics
+from controller.flow_identity import FlowSelector
 from controller.routing import RoutingDecision, RoutingService
 from controller.topology import TopologyManager
 
@@ -54,9 +55,12 @@ class ActiveFlow:
     path: tuple[int, ...]
     installed_cost: float
     last_reroute_at: float
+    selector: FlowSelector | None = None
 
     @property
-    def key(self) -> tuple[str, str]:
+    def key(self) -> tuple:
+        if self.selector is not None:
+            return self.selector.key
         return tuple(
             sorted(
                 (
@@ -76,10 +80,10 @@ class MigrationPlan:
 
 
 class FlowRegistry:
-    """Track each bidirectional MAC pair as one active flow."""
+    """Track bidirectional L2 or normalized five-tuple flows."""
 
     def __init__(self) -> None:
-        self._flows: dict[tuple[str, str], ActiveFlow] = {}
+        self._flows: dict[tuple, ActiveFlow] = {}
 
     def register_initial(self, flow: ActiveFlow) -> ActiveFlow:
         existing = self._flows.get(flow.key)
@@ -104,6 +108,7 @@ class FlowRegistry:
             path=decision.path,
             installed_cost=decision.cost,
             last_reroute_at=changed_at,
+            selector=flow.selector,
         )
         self._flows[updated.key] = updated
         return updated
@@ -114,15 +119,31 @@ class FlowRegistry:
     def remove_by_macs(
         self, source_mac: str, destination_mac: str
     ) -> ActiveFlow | None:
-        key = tuple(
-            sorted(
-                (
-                    source_mac.lower(),
-                    destination_mac.lower(),
-                )
-            )
-        )
-        return self._flows.pop(key, None)
+        pair = {
+            source_mac.lower(),
+            destination_mac.lower(),
+        }
+        for key, flow in tuple(self._flows.items()):
+            if {
+                flow.source_mac.lower(),
+                flow.destination_mac.lower(),
+            } == pair:
+                return self._flows.pop(key)
+        return None
+
+    def remove_by_match(
+        self, match: dict[str, object]
+    ) -> ActiveFlow | None:
+        selector = FlowSelector.from_match(match)
+        if selector is not None:
+            removed = self._flows.pop(selector.key, None)
+            if removed is not None:
+                return removed
+        source = match.get("eth_src")
+        destination = match.get("eth_dst")
+        if source is None or destination is None:
+            return None
+        return self.remove_by_macs(str(source), str(destination))
 
     def flows_for_host(self, mac: str) -> tuple[ActiveFlow, ...]:
         normalized = mac.lower()

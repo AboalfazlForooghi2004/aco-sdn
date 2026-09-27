@@ -90,6 +90,44 @@ class TelemetryCollectorTests(unittest.TestCase):
         metrics = collector.link_metrics(topology, now=1)
 
         self.assertFalse(metrics[(1, 2)].available)
+        self.assertEqual(metrics[(1, 2)].confidence, 0.0)
+
+    def test_discovered_port_capacity_overrides_default(self) -> None:
+        collector = TelemetryCollector(100_000_000, 5)
+        self.assertTrue(
+            collector.update_capacity(
+                1, 7, 10_000_000, "openflow_port_desc"
+            )
+        )
+        collector.update(1, 7, counters(10, tx_bytes=0))
+        result = collector.update(
+            1,
+            7,
+            counters(11, tx_bytes=1_000_000),
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.capacity_bps, 10_000_000)
+        self.assertEqual(result.utilization, 0.8)
+        self.assertEqual(
+            result.capacity_source, "openflow_port_desc"
+        )
+
+    def test_link_metrics_include_provenance(self) -> None:
+        collector = TelemetryCollector(10_000, 5)
+        topology = TopologyManager()
+        topology.add_link(1, 2, 7, 8)
+        collector.update(1, 7, counters(10))
+        collector.update(1, 7, counters(11, tx_bytes=100))
+
+        metric = collector.link_metrics(
+            topology, now=12
+        )[(1, 2)]
+
+        self.assertEqual(metric.confidence, 0.8)
+        self.assertEqual(metric.observed_at, 11)
+        self.assertIn("openflow_port_stats", metric.provenance)
 
 
 if __name__ == "__main__":

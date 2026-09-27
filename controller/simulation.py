@@ -62,6 +62,9 @@ class WhatIfSimulator:
         proposed_path: tuple[int, ...],
         flow_demand_bps: float | None = None,
         link_capacity_bps: float | None = None,
+        link_capacities_bps: (
+            dict[tuple[int, int], float] | None
+        ) = None,
     ) -> WhatIfResult:
         current = self._assess(
             topology, metrics, current_path
@@ -73,14 +76,17 @@ class WhatIfSimulator:
         if flow_demand_bps is None:
             warnings.append("flow_bandwidth_not_modeled")
         else:
-            if link_capacity_bps is None or link_capacity_bps <= 0:
+            if (
+                not link_capacities_bps
+                and (
+                    link_capacity_bps is None
+                    or link_capacity_bps <= 0
+                )
+            ):
                 raise ValueError(
                     "positive link_capacity_bps is required "
                     "when flow demand is provided"
                 )
-            demand_fraction = max(
-                flow_demand_bps, 0.0
-            ) / link_capacity_bps
             current_edges = set(
                 zip(current_path, current_path[1:])
             )
@@ -92,6 +98,19 @@ class WhatIfSimulator:
                 value = projected_metrics.get(edge)
                 if value is None:
                     continue
+                capacity = (
+                    link_capacities_bps.get(edge)
+                    if link_capacities_bps
+                    else link_capacity_bps
+                )
+                if capacity is None or capacity <= 0:
+                    warnings.append(
+                        f"missing_capacity:{edge[0]}->{edge[1]}"
+                    )
+                    continue
+                demand_fraction = max(
+                    flow_demand_bps, 0.0
+                ) / capacity
                 projected_metrics[edge] = replace(
                     value,
                     utilization=min(
@@ -99,11 +118,13 @@ class WhatIfSimulator:
                         value.utilization + demand_fraction,
                     ),
                 )
-            warnings.extend(
-                (
-                    "flow_demand_estimated_from_openflow_counters",
-                    "global_link_capacity_assumed",
-                )
+            warnings.append(
+                "flow_demand_estimated_from_openflow_counters"
+            )
+            warnings.append(
+                "per_link_capacity_used"
+                if link_capacities_bps
+                else "global_link_capacity_assumed"
             )
         proposed = self._assess(
             topology, projected_metrics, proposed_path

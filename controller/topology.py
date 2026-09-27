@@ -23,14 +23,32 @@ class HostLocation:
     last_seen: float
 
 
+@dataclass(frozen=True, slots=True)
+class HostLearningPolicy:
+    move_hold_down_seconds: float = 0.0
+    trusted_edge_ports: frozenset[
+        tuple[int, int]
+    ] = frozenset()
+
+    def __post_init__(self) -> None:
+        if self.move_hold_down_seconds < 0:
+            raise ValueError(
+                "move_hold_down_seconds cannot be negative"
+            )
+
+
 class TopologyManager:
     """In-memory switches, directed links, and learned host locations."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        host_policy: HostLearningPolicy | None = None,
+    ) -> None:
         self._switches: set[int] = set()
         self._links: dict[tuple[int, int], LinkPorts] = {}
         self._hosts: dict[str, HostLocation] = {}
         self._generation = 0
+        self.host_policy = host_policy or HostLearningPolicy()
 
     @property
     def generation(self) -> int:
@@ -113,6 +131,20 @@ class TopologyManager:
             time.monotonic() if observed_at is None else observed_at
         )
         previous = self._hosts.get(normalized_mac)
+        attachment = (dpid, port)
+        if (
+            self.host_policy.trusted_edge_ports
+            and attachment
+            not in self.host_policy.trusted_edge_ports
+        ):
+            return False
+        if (
+            previous is not None
+            and (previous.dpid, previous.port) != attachment
+            and timestamp - previous.last_seen
+            < self.host_policy.move_hold_down_seconds
+        ):
+            return False
         self.add_switch(dpid)
         self._hosts[normalized_mac] = HostLocation(
             dpid=dpid,
