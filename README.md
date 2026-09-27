@@ -6,7 +6,8 @@ installs them through OpenFlow 1.3.
 
 ## Current milestone
 
-The first milestone delivers a controller-independent routing core:
+The first two milestones deliver a controller-independent routing core
+and the initial Ryu discovery adapter:
 
 - directed graph with validated latency, utilization, loss, and
   availability metrics;
@@ -15,9 +16,12 @@ The first milestone delivers a controller-independent routing core:
 - deterministic minimum-cost fallback;
 - six-switch multipath Mininet topology;
 - unit tests for congestion-aware selection and failed-link exclusion.
+- Ryu switch/link discovery and OpenFlow 1.3 table-miss setup;
+- host learning with attachment-point move detection and cleanup.
 
-Ryu integration and live OpenFlow telemetry are the next milestone;
-this repository does **not** yet control OVS flows.
+Live telemetry and ACO-selected flow installation are the next
+milestone. The controller currently floods traffic that does not have a
+safe same-switch destination; it does **not** yet install routed paths.
 
 ## Layout
 
@@ -46,6 +50,25 @@ sudo python topology/mininet_topology.py
 
 The topology expects an OpenFlow controller on `127.0.0.1:6653`.
 
+## Run discovery controller
+
+On the Ubuntu lab host, install dependencies and start Ryu with link
+observation enabled:
+
+```bash
+python -m pip install -r requirements-lab.txt
+ryu-manager --observe-links controller/main.py
+```
+
+In another terminal:
+
+```bash
+sudo python topology/mininet_topology.py
+```
+
+Ryu logs switch/link events and learned host attachment points. This
+stage intentionally does not install end-to-end ACO paths yet.
+
 ## Cost model
 
 ```text
@@ -61,9 +84,9 @@ milliseconds.
 
 ## Roadmap
 
-1. Ryu topology discovery and host learning
-2. periodic port/flow statistics collection
-3. bidirectional OpenFlow rule installation
+1. periodic port/flow statistics collection
+2. conversion of telemetry into normalized link metrics
+3. bidirectional ACO-selected OpenFlow rule installation
 4. threshold, hysteresis, cooldown, and stale-telemetry handling
 5. repeatable experiments with CSV results and baseline comparisons
 

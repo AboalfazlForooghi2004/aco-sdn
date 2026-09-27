@@ -32,6 +32,9 @@ class NetworkGraph:
         self._adjacency.setdefault(source, {})[target] = metrics
         self._adjacency.setdefault(target, {})
 
+    def add_node(self, node: str) -> None:
+        self._adjacency.setdefault(node, {})
+
     def add_bidirectional_link(
         self, left: str, right: str, metrics: LinkMetrics
     ) -> None:
