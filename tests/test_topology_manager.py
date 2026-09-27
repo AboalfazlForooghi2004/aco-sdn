@@ -13,6 +13,8 @@ class TopologyManagerTests(unittest.TestCase):
         self.assertEqual(topology.switches, frozenset({1, 2}))
         self.assertEqual(topology.output_port(1, 2), 11)
         self.assertEqual(topology.output_port(2, 1), 22)
+        self.assertTrue(topology.is_link_port(1, 11))
+        self.assertFalse(topology.is_link_port(1, 99))
 
     def test_host_learning_detects_moves(self) -> None:
         topology = TopologyManager()

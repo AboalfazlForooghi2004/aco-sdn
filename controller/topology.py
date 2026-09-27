@@ -107,6 +107,12 @@ class TopologyManager:
     def output_port(self, source_dpid: int, target_dpid: int) -> int:
         return self._links[(source_dpid, target_dpid)].source_port
 
+    def is_link_port(self, dpid: int, port: int) -> bool:
+        return any(
+            source == dpid and ports.source_port == port
+            for (source, _), ports in self._links.items()
+        )
+
     def build_graph(
         self,
         metrics: dict[tuple[int, int], LinkMetrics] | None = None,

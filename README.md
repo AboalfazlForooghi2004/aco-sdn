@@ -19,10 +19,11 @@ and the initial Ryu discovery adapter:
 - Ryu switch/link discovery and OpenFlow 1.3 table-miss setup;
 - host learning with attachment-point move detection and cleanup.
 
-Port telemetry is now collected periodically and converted into
-utilization/loss metrics. ACO-selected flow installation is the next
-milestone. The controller currently floods traffic that does not have a
-safe same-switch destination; it does **not** yet install routed paths.
+Port telemetry is collected periodically and converted into
+utilization/loss metrics. The controller now selects an ACO path and
+installs bidirectional OpenFlow 1.3 rules for learned hosts. If fresh
+telemetry cannot produce a path, it uses a deterministic minimum-hop
+fallback.
 
 ## Layout
 
@@ -70,7 +71,9 @@ sudo python topology/mininet_topology.py
 Ryu logs switch/link events and learned host attachment points. This
 stage also polls OpenFlow port counters, calculates byte rates,
 utilization and transmit-drop loss, and rejects stale or reset counter
-series. It intentionally does not install end-to-end ACO paths yet.
+series. Once both hosts are learned, it installs end-to-end rules for
+the selected path. MAC addresses observed on inter-switch ports are not
+treated as directly attached hosts.
 
 ## Cost model
 
@@ -87,9 +90,9 @@ milliseconds.
 
 ## Roadmap
 
-1. bidirectional ACO-selected OpenFlow rule installation
-2. latency measurement and flow-stat correlation
-3. threshold, hysteresis, cooldown, and route migration
+1. latency measurement and flow-stat correlation
+2. threshold, hysteresis, cooldown, and make-before-break migration
+3. flow lifecycle, explicit modification, and deletion
 4. repeatable experiments with CSV results and baseline comparisons
 
 ## Status

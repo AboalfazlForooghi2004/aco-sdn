@@ -15,7 +15,15 @@ from ryu.lib.packet import ethernet, ether_types, packet
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
-from controller.settings import load_telemetry_settings
+from controller.flow_manager import (
+    FlowManager,
+    build_bidirectional_plan,
+)
+from controller.routing import RoutingService
+from controller.settings import (
+    load_optimizer,
+    load_telemetry_settings,
+)
 from controller.telemetry import PortCounters, TelemetryCollector
 from controller.topology import TopologyManager
 
@@ -38,6 +46,8 @@ class ACOSDNController(app_manager.RyuApp):
                 self.telemetry_settings.max_age_seconds
             ),
         )
+        self.routing = RoutingService(load_optimizer())
+        self.flow_manager = FlowManager()
         self.monitor_thread = hub.spawn(self._monitor)
 
     @set_ev_cls(
@@ -183,26 +193,94 @@ class ACOSDNController(app_manager.RyuApp):
         if frame is None or frame.ethertype == ether_types.ETH_TYPE_LLDP:
             return
 
-        moved = self.topology.learn_host(
-            frame.src,
-            datapath.id,
-            in_port,
-        )
-        if moved:
-            self.logger.info(
-                "host learned: mac=%s dpid=%s port=%s",
+        if not self.topology.is_link_port(datapath.id, in_port):
+            moved = self.topology.learn_host(
                 frame.src,
                 datapath.id,
                 in_port,
             )
+            if moved:
+                self.logger.info(
+                    "host learned: mac=%s dpid=%s port=%s",
+                    frame.src,
+                    datapath.id,
+                    in_port,
+                )
+
+        source = self.topology.host_location(frame.src)
+        if (
+            source is None
+            or source.dpid != datapath.id
+            or source.port != in_port
+        ):
+            self._send_packet_out(
+                msg,
+                in_port,
+                datapath.ofproto.OFPP_FLOOD,
+            )
+            return
 
         destination = self.topology.host_location(frame.dst)
-        out_port = (
-            destination.port
-            if destination is not None
-            and destination.dpid == datapath.id
-            else datapath.ofproto.OFPP_FLOOD
-        )
+        if destination is None:
+            self._send_packet_out(
+                msg,
+                in_port,
+                datapath.ofproto.OFPP_FLOOD,
+            )
+            return
+
+        try:
+            metrics = self.telemetry.link_metrics(self.topology)
+            decision = self.routing.select_path(
+                self.topology,
+                metrics,
+                datapath.id,
+                destination.dpid,
+            )
+            rules = build_bidirectional_plan(
+                topology=self.topology,
+                path=decision.path,
+                source_mac=frame.src,
+                destination_mac=frame.dst,
+                source_host_port=in_port,
+                destination_host_port=destination.port,
+            )
+            self.flow_manager.install(self.datapaths, rules)
+            first_forward_rule = next(
+                rule
+                for rule in rules
+                if rule.dpid == datapath.id
+                and rule.source_mac == frame.src.lower()
+                and rule.destination_mac == frame.dst.lower()
+            )
+            self.logger.info(
+                "route installed: %s -> %s path=%s "
+                "cost=%.4f fallback=%s",
+                frame.src,
+                frame.dst,
+                decision.path,
+                decision.cost,
+                decision.used_fallback,
+            )
+            self._send_packet_out(
+                msg,
+                in_port,
+                first_forward_rule.output_port,
+            )
+        except (KeyError, ValueError, StopIteration) as exc:
+            self.logger.warning(
+                "route installation failed; flooding packet: %s",
+                exc,
+            )
+            self._send_packet_out(
+                msg,
+                in_port,
+                datapath.ofproto.OFPP_FLOOD,
+            )
+
+    @staticmethod
+    def _send_packet_out(msg, in_port: int, out_port: int) -> None:
+        datapath = msg.datapath
         actions = [
             datapath.ofproto_parser.OFPActionOutput(out_port)
         ]
