@@ -148,6 +148,8 @@ class OfflineRoutingEnv:
         return {
             "source_dpid": decision["source_dpid"],
             "destination_dpid": decision["destination_dpid"],
+            "current_path": decision["current_path"],
+            "candidate_path": decision["candidate_path"],
             "current_cost": decision["current_cost"],
             "candidate_cost": decision["candidate_cost"],
             "simulation_safe": decision["simulation_safe"],

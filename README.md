@@ -214,6 +214,12 @@ OpenFlow datapaths. Run
 the built-in keep-path and greedy-safe shadow policies. See
 `docs/offline-learning.md`.
 
+Before training, run
+`python scripts/inspect_dataset.py data/routing-learning.jsonl`. A stable
+graph encoder produces GNN-ready node, edge, and global features, while a
+promotion gate blocks policies with insufficient coverage, unsafe actions,
+or no reward improvement.
+
 ## GitHub Codespaces
 
 The repository includes a privileged Ubuntu-based dev container with
