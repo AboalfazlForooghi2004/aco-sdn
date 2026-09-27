@@ -256,9 +256,19 @@ GET /api/v1/forecasts
 GET /api/v1/recommendations
 GET /api/v1/flows
 GET /api/v1/migrations
+GET /api/v1/events
 GET /api/v1/snapshot
 ```
 
 The immutable snapshot includes a `0..100` network health score and
 lets a future dashboard read controller state without importing Ryu or
 touching mutable protocol objects. No endpoint can modify the network.
+
+## Incident and decision timeline
+
+Controller lifecycle, recommendations, migration proposals, successful
+migrations, and failures are appended to a bounded JSONL event log.
+Events survive controller restarts and are also exposed through the
+read-only snapshot API. Every event has an ID, wall-clock timestamp,
+category, severity, title, and structured details suitable for replay
+or automated incident reports.

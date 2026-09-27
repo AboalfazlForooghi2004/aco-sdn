@@ -45,3 +45,7 @@ control:
   api_enabled: true
   api_host: 127.0.0.1
   api_port: 8080
+
+events:
+  path: data/events.jsonl
+  max_events: 1000
