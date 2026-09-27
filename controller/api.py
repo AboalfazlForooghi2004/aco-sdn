@@ -57,6 +57,7 @@ class SnapshotApiServer:
                     "/api/v1/migrations": snapshot[
                         "migration_proposals"
                     ],
+                    "/api/v1/events": snapshot["events"],
                 }
                 if path not in routes:
                     self._respond(

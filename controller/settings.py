@@ -34,6 +34,12 @@ class ControlSettings:
     api_port: int
 
 
+@dataclass(frozen=True, slots=True)
+class EventSettings:
+    path: str
+    max_events: int
+
+
 def _config_path(path: str | Path | None) -> Path:
     return (
         Path(path)
@@ -176,4 +182,14 @@ def load_control_settings(
         api_enabled=bool(control["api_enabled"]),
         api_host=str(control["api_host"]),
         api_port=int(control["api_port"]),
+    )
+
+
+def load_event_settings(
+    path: str | Path | None = None,
+) -> EventSettings:
+    events = _load_document(path)["events"]
+    return EventSettings(
+        path=str(events["path"]),
+        max_events=int(events["max_events"]),
     )

@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any
 
 from aco.models import LinkMetrics
+from controller.events import EventRecord
 from controller.rerouting import ActiveFlow, MigrationPlan
 from prediction.engine import EdgeForecast
 from recommendation.engine import Recommendation
@@ -64,6 +65,7 @@ class ControlSnapshot:
     recommendations: tuple[dict[str, Any], ...]
     flows: tuple[dict[str, Any], ...]
     migration_proposals: tuple[dict[str, Any], ...]
+    events: tuple[dict[str, Any], ...]
 
     @classmethod
     def empty(cls, mode: OperatingMode) -> "ControlSnapshot":
@@ -78,6 +80,7 @@ class ControlSnapshot:
             recommendations=(),
             flows=(),
             migration_proposals=(),
+            events=(),
         )
 
 
@@ -139,6 +142,7 @@ class SnapshotStore:
         recommendations: tuple[Recommendation, ...],
         flows: tuple[ActiveFlow, ...],
         proposals: tuple[MigrationProposal, ...],
+        events: tuple[EventRecord, ...],
     ) -> ControlSnapshot:
         snapshot = ControlSnapshot(
             generated_at=generated_at,
@@ -182,6 +186,7 @@ class SnapshotStore:
             migration_proposals=tuple(
                 asdict(item) for item in proposals
             ),
+            events=tuple(asdict(item) for item in events),
         )
         with self._lock:
             self._snapshot = snapshot

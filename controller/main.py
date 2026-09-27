@@ -16,6 +16,7 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
 from controller.api import SnapshotApiServer
+from controller.events import EventTimeline
 from controller.flow_manager import (
     FlowManager,
     build_bidirectional_plan,
@@ -35,6 +36,7 @@ from controller.rerouting import (
 from controller.routing import RoutingService
 from controller.settings import (
     load_control_settings,
+    load_event_settings,
     load_optimizer,
     load_prediction_config,
     load_recommendation_settings,
@@ -82,6 +84,20 @@ class ACOSDNController(app_manager.RyuApp):
         self.flow_manager = FlowManager()
         self.flow_registry = FlowRegistry()
         self.control_settings = load_control_settings()
+        event_settings = load_event_settings()
+        self.event_timeline = EventTimeline(
+            event_settings.path,
+            event_settings.max_events,
+        )
+        self.event_timeline.append(
+            occurred_at=time.time(),
+            category="controller",
+            severity="info",
+            title="Controller started",
+            details={
+                "mode": self.control_settings.mode.value
+            },
+        )
         self.snapshot_store = SnapshotStore(
             self.control_settings.mode
         )
@@ -114,6 +130,7 @@ class ACOSDNController(app_manager.RyuApp):
         self.current_forecasts = ()
         self.current_recommendations = ()
         self._logged_recommendation_ids: set[str] = set()
+        self._logged_proposal_ids: set[str] = set()
         self.monitor_thread = hub.spawn(self._monitor)
         if self.api_server is not None:
             host, port = self.api_server.address
@@ -233,10 +250,38 @@ class ACOSDNController(app_manager.RyuApp):
                 len(recommendation.affected_flows),
                 recommendation.rationale,
             )
+            self.event_timeline.append(
+                occurred_at=time.time(),
+                category="recommendation",
+                severity=(
+                    "warning"
+                    if recommendation.urgency == "high"
+                    else "info"
+                ),
+                title=recommendation.title,
+                details={
+                    "recommendation_id": (
+                        recommendation.recommendation_id
+                    ),
+                    "confidence": (
+                        recommendation.confidence
+                    ),
+                    "urgency": recommendation.urgency,
+                    "signals": list(
+                        recommendation.rationale
+                    ),
+                    "affected_flows": [
+                        list(item)
+                        for item in (
+                            recommendation.affected_flows
+                        )
+                    ],
+                },
+            )
         self._logged_recommendation_ids = current_ids
         proposals = self._evaluate_reroutes(metrics, now)
         self.snapshot_store.publish(
-            generated_at=now,
+            generated_at=time.time(),
             mode=self.control_settings.mode,
             switches=tuple(self.topology.switches),
             links=self.topology.links,
@@ -245,6 +290,7 @@ class ACOSDNController(app_manager.RyuApp):
             recommendations=self.current_recommendations,
             flows=self.flow_registry.flows,
             proposals=proposals,
+            events=self.event_timeline.recent(),
         )
 
     def _evaluate_reroutes(
@@ -268,6 +314,32 @@ class ACOSDNController(app_manager.RyuApp):
                 migration, now
             )
             proposals.append(proposal)
+            if (
+                proposal.proposal_id
+                not in self._logged_proposal_ids
+            ):
+                self.event_timeline.append(
+                    occurred_at=time.time(),
+                    category="migration",
+                    severity=(
+                        "warning"
+                        if proposal.forced
+                        else "info"
+                    ),
+                    title="Route migration proposed",
+                    details={
+                        "proposal_id": proposal.proposal_id,
+                        "source_mac": proposal.source_mac,
+                        "destination_mac": (
+                            proposal.destination_mac
+                        ),
+                        "old_path": list(proposal.old_path),
+                        "new_path": list(proposal.new_path),
+                        "old_cost": proposal.old_cost,
+                        "new_cost": proposal.new_cost,
+                        "forced": proposal.forced,
+                    },
+                )
             if (
                 self.control_settings.mode
                 == OperatingMode.RECOMMEND
@@ -332,10 +404,42 @@ class ACOSDNController(app_manager.RyuApp):
                     migration.decision.cost,
                     migration.forced,
                 )
+                self.event_timeline.append(
+                    occurred_at=time.time(),
+                    category="migration",
+                    severity="info",
+                    title="Route migration applied",
+                    details={
+                        "proposal_id": proposal.proposal_id,
+                        "old_path": list(flow.path),
+                        "new_path": list(
+                            migration.decision.path
+                        ),
+                        "old_cost": (
+                            migration.current_cost
+                        ),
+                        "new_cost": (
+                            migration.decision.cost
+                        ),
+                    },
+                )
             except (KeyError, ValueError) as exc:
                 self.logger.warning(
                     "flow reroute failed: %s", exc
                 )
+                self.event_timeline.append(
+                    occurred_at=time.time(),
+                    category="migration",
+                    severity="error",
+                    title="Route migration failed",
+                    details={
+                        "proposal_id": proposal.proposal_id,
+                        "error": str(exc),
+                    },
+                )
+        self._logged_proposal_ids = {
+            item.proposal_id for item in proposals
+        }
         return tuple(proposals)
 
     @staticmethod

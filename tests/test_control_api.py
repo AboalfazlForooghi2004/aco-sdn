@@ -87,6 +87,7 @@ class ControlApiTests(unittest.TestCase):
             ),
             flows=(),
             proposals=(),
+            events=(),
         )
         server = SnapshotApiServer(
             store, "127.0.0.1", 0
@@ -107,6 +108,10 @@ class ControlApiTests(unittest.TestCase):
                 f"{base}/recommendations", timeout=2
             ) as response:
                 recommendations = json.load(response)
+            with urlopen(
+                f"{base}/events", timeout=2
+            ) as response:
+                events = json.load(response)
             self.assertEqual(health["mode"], "recommend")
             self.assertGreater(health["health_score"], 0)
             self.assertEqual(forecasts[0]["edge"], [1, 2])
@@ -116,6 +121,7 @@ class ControlApiTests(unittest.TestCase):
                 ],
                 "r1",
             )
+            self.assertEqual(events, [])
             with self.assertRaises(HTTPError) as error:
                 urlopen(f"{base}/missing", timeout=2)
             self.assertEqual(error.exception.code, 404)
