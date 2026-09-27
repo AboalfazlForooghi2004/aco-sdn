@@ -37,7 +37,9 @@ class ReroutingTests(unittest.TestCase):
             routing,
             ReroutePolicy(
                 utilization_threshold=0.8,
+                utilization_hysteresis=0.1,
                 loss_threshold=0.05,
+                loss_hysteresis=0.01,
                 minimum_improvement=0.1,
                 cooldown_seconds=10,
             ),
@@ -134,6 +136,42 @@ class ReroutingTests(unittest.TestCase):
 
         self.assertEqual(existing, self.flow)
         self.assertEqual(len(registry.flows), 1)
+
+    def test_hysteresis_keeps_edge_latched_until_clear(self) -> None:
+        high = {
+            (1, 2): LinkMetrics(utilization=0.85)
+        }
+        between = {
+            (1, 2): LinkMetrics(utilization=0.75)
+        }
+        clear = {
+            (1, 2): LinkMetrics(utilization=0.65)
+        }
+
+        self.manager.update_congestion_state(high)
+        self.assertIn((1, 2), self.manager.congested_edges)
+        self.manager.update_congestion_state(between)
+        self.assertIn((1, 2), self.manager.congested_edges)
+        self.manager.update_congestion_state(clear)
+        self.assertNotIn(
+            (1, 2), self.manager.congested_edges
+        )
+
+    def test_registry_finds_and_removes_host_flows(self) -> None:
+        registry = FlowRegistry()
+        registry.register_initial(self.flow)
+
+        self.assertEqual(
+            registry.flows_for_host(self.flow.source_mac),
+            (self.flow,),
+        )
+        removed = registry.remove_by_macs(
+            self.flow.destination_mac,
+            self.flow.source_mac,
+        )
+
+        self.assertEqual(removed, self.flow)
+        self.assertEqual(registry.flows, ())
 
 
 if __name__ == "__main__":

@@ -83,7 +83,13 @@ def load_reroute_policy(
         utilization_threshold=float(
             rerouting["utilization_threshold"]
         ),
+        utilization_hysteresis=float(
+            rerouting["utilization_hysteresis"]
+        ),
         loss_threshold=float(rerouting["loss_threshold"]),
+        loss_hysteresis=float(
+            rerouting["loss_hysteresis"]
+        ),
         minimum_improvement=float(
             rerouting["minimum_improvement"]
         ),

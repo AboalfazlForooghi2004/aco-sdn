@@ -17,7 +17,9 @@ cost:
 
 rerouting:
   utilization_threshold: 0.80
+  utilization_hysteresis: 0.10
   loss_threshold: 0.05
+  loss_hysteresis: 0.01
   latency_increase_threshold: 0.30
   minimum_improvement: 0.10
   cooldown_seconds: 10

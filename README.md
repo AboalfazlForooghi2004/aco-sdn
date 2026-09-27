@@ -82,6 +82,14 @@ checks. Link unavailability bypasses cooldown. Replacement rules are
 installed before old-only path rules are deleted; rules on shared
 switches are modified in place.
 
+Congestion state uses separate entry and exit levels. A link that
+crosses a threshold remains latched until utilization and loss fall
+below their configured hysteresis clear levels. Installed rules request
+OpenFlow removal notifications. Idle/hard timeout events remove the
+corresponding active-flow record, while controller-initiated deletion
+events are ignored. When a host moves, all tracked paths involving its
+MAC address are explicitly removed before a new route is learned.
+
 ## Cost model
 
 ```text
@@ -98,9 +106,9 @@ milliseconds.
 ## Roadmap
 
 1. latency measurement and flow-stat correlation
-2. explicit hysteresis state around rerouting thresholds
-3. flow-removed lifecycle and host-move cleanup
-4. repeatable experiments with CSV results and baseline comparisons
+2. repeatable congestion and link-failure scenario runners
+3. CSV experiment results and baseline comparison
+4. integration validation on Ubuntu/Mininet/OVS
 
 ## Status
 

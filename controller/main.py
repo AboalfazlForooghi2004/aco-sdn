@@ -272,6 +272,9 @@ class ACOSDNController(app_manager.RyuApp):
             return
 
         if not self.topology.is_link_port(datapath.id, in_port):
+            previous_location = self.topology.host_location(
+                frame.src
+            )
             moved = self.topology.learn_host(
                 frame.src,
                 datapath.id,
@@ -284,6 +287,8 @@ class ACOSDNController(app_manager.RyuApp):
                     datapath.id,
                     in_port,
                 )
+            if moved and previous_location is not None:
+                self._cleanup_host_flows(frame.src)
 
         source = self.topology.host_location(frame.src)
         if (
@@ -367,6 +372,56 @@ class ACOSDNController(app_manager.RyuApp):
                 msg,
                 in_port,
                 datapath.ofproto.OFPP_FLOOD,
+            )
+
+    def _cleanup_host_flows(self, mac: str) -> None:
+        for flow in self.flow_registry.flows_for_host(mac):
+            try:
+                rules = build_bidirectional_plan(
+                    topology=self.topology,
+                    path=flow.path,
+                    source_mac=flow.source_mac,
+                    destination_mac=flow.destination_mac,
+                    source_host_port=flow.source_host_port,
+                    destination_host_port=(
+                        flow.destination_host_port
+                    ),
+                )
+                self.flow_manager.delete(self.datapaths, rules)
+            except KeyError as exc:
+                self.logger.debug(
+                    "partial host-move cleanup: %s", exc
+                )
+            self.flow_registry.remove(flow)
+            self.logger.info(
+                "flow removed after host move: %s -> %s",
+                flow.source_mac,
+                flow.destination_mac,
+            )
+
+    @set_ev_cls(
+        ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER
+    )
+    def flow_removed_handler(self, ev) -> None:
+        msg = ev.msg
+        if msg.reason not in {
+            msg.datapath.ofproto.OFPRR_IDLE_TIMEOUT,
+            msg.datapath.ofproto.OFPRR_HARD_TIMEOUT,
+        }:
+            return
+        source_mac = msg.match.get("eth_src")
+        destination_mac = msg.match.get("eth_dst")
+        if source_mac is None or destination_mac is None:
+            return
+        removed = self.flow_registry.remove_by_macs(
+            source_mac,
+            destination_mac,
+        )
+        if removed is not None:
+            self.logger.info(
+                "inactive flow expired: %s -> %s",
+                removed.source_mac,
+                removed.destination_mac,
             )
 
     @staticmethod

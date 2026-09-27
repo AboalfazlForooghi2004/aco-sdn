@@ -105,6 +105,9 @@ class FlowManager:
                     cookie=self.cookie,
                     priority=self.priority,
                     idle_timeout=self.idle_timeout,
+                    flags=(
+                        datapath.ofproto.OFPFF_SEND_FLOW_REM
+                    ),
                     match=match,
                     instructions=instructions,
                 )
