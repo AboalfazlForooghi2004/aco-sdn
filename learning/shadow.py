@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .environment import OfflineRoutingEnv
+from .quality import DatasetQualityReport
 
 
 class ShadowPolicy(Protocol):
@@ -70,4 +71,50 @@ class ShadowEvaluator:
             average_reward=sum(rewards) / total,
             candidate_selection_rate=candidates / total,
             unsafe_action_rate=unsafe / total,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionAssessment:
+    eligible: bool
+    violations: tuple[str, ...]
+    reward_improvement: float
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionGate:
+    min_episodes: int = 100
+    min_outcome_coverage: float = 0.95
+    max_unsafe_action_rate: float = 0.0
+    min_reward_improvement: float = 0.0
+
+    def assess(
+        self,
+        *,
+        candidate: ShadowEvaluation,
+        baseline: ShadowEvaluation,
+        quality: DatasetQualityReport,
+    ) -> PromotionAssessment:
+        violations = []
+        improvement = (
+            candidate.average_reward - baseline.average_reward
+        )
+        if candidate.episodes < self.min_episodes:
+            violations.append("insufficient_episodes")
+        if (
+            quality.outcome_coverage
+            < self.min_outcome_coverage
+        ):
+            violations.append("insufficient_outcome_coverage")
+        if (
+            candidate.unsafe_action_rate
+            > self.max_unsafe_action_rate
+        ):
+            violations.append("unsafe_action_rate_exceeded")
+        if improvement < self.min_reward_improvement:
+            violations.append("reward_improvement_too_low")
+        return PromotionAssessment(
+            eligible=not violations,
+            violations=tuple(violations),
+            reward_improvement=improvement,
         )
