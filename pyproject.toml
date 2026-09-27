@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aco-sdn"
+version = "0.1.0"
+description = "ACO-based dynamic routing core for an OpenFlow SDN controller"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0"]
+
+[tool.setuptools]
+packages = ["aco"]

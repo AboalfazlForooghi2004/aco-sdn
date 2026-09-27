@@ -1,0 +1,24 @@
+aco:
+  alpha: 1.0
+  beta: 2.0
+  evaporation: 0.4
+  ants: 20
+  iterations: 50
+  pheromone_initial: 1.0
+  deposit_q: 1.0
+  seed: 42
+
+cost:
+  latency: 0.30
+  utilization: 0.30
+  loss: 0.25
+  hop: 0.15
+  latency_reference_ms: 100.0
+
+rerouting:
+  utilization_threshold: 0.80
+  loss_threshold: 0.05
+  latency_increase_threshold: 0.30
+  minimum_improvement: 0.10
+  cooldown_seconds: 10
+  telemetry_max_age_seconds: 5
