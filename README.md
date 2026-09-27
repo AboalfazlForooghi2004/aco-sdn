@@ -198,3 +198,12 @@ test, and deterministic offline scenarios. The integration simulation
 validates ACO rerouting, make-before-break ordering, FlowMod creation,
 and strict deletion without requiring root or OVS. Run
 `make preflight` on the Ubuntu host before live tests.
+
+## GitHub Codespaces
+
+The repository includes a privileged Ubuntu-based dev container with
+Mininet, Open vSwitch, iproute2, iperf3, Ansible, Python 3.10, and Ryu
+dependencies. Codespace creation runs the unit suite, offline
+experiments, starts OVS when supported, and prints the live-lab
+preflight result. The actual Mininet run still depends on the
+capabilities exposed by the Codespaces host.
