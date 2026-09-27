@@ -15,6 +15,7 @@ from ryu.lib.packet import ethernet, ether_types, packet
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
+from controller.api import SnapshotApiServer
 from controller.flow_manager import (
     FlowManager,
     build_bidirectional_plan,
@@ -33,11 +34,17 @@ from controller.rerouting import (
 )
 from controller.routing import RoutingService
 from controller.settings import (
+    load_control_settings,
     load_optimizer,
     load_prediction_config,
     load_recommendation_settings,
     load_reroute_policy,
     load_telemetry_settings,
+)
+from controller.state import (
+    MigrationProposal,
+    OperatingMode,
+    SnapshotStore,
 )
 from controller.telemetry import PortCounters, TelemetryCollector
 from controller.topology import TopologyManager
@@ -74,6 +81,18 @@ class ACOSDNController(app_manager.RyuApp):
         self.routing = RoutingService(load_optimizer())
         self.flow_manager = FlowManager()
         self.flow_registry = FlowRegistry()
+        self.control_settings = load_control_settings()
+        self.snapshot_store = SnapshotStore(
+            self.control_settings.mode
+        )
+        self.api_server = None
+        if self.control_settings.api_enabled:
+            self.api_server = SnapshotApiServer(
+                self.snapshot_store,
+                self.control_settings.api_host,
+                self.control_settings.api_port,
+            )
+            self.api_server.start()
         self.reroute_manager = RerouteManager(
             self.routing,
             load_reroute_policy(),
@@ -96,6 +115,20 @@ class ACOSDNController(app_manager.RyuApp):
         self.current_recommendations = ()
         self._logged_recommendation_ids: set[str] = set()
         self.monitor_thread = hub.spawn(self._monitor)
+        if self.api_server is not None:
+            host, port = self.api_server.address
+            self.logger.info(
+                "read-only API started: http://%s:%s "
+                "mode=%s",
+                host,
+                port,
+                self.control_settings.mode.value,
+            )
+
+    def close(self) -> None:
+        if self.api_server is not None:
+            self.api_server.shutdown()
+        super().close()
 
     @set_ev_cls(
         ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER
@@ -201,13 +234,27 @@ class ACOSDNController(app_manager.RyuApp):
                 recommendation.rationale,
             )
         self._logged_recommendation_ids = current_ids
-        self._evaluate_reroutes(metrics, now)
+        proposals = self._evaluate_reroutes(metrics, now)
+        self.snapshot_store.publish(
+            generated_at=now,
+            mode=self.control_settings.mode,
+            switches=tuple(self.topology.switches),
+            links=self.topology.links,
+            metrics=metrics,
+            forecasts=self.current_forecasts,
+            recommendations=self.current_recommendations,
+            flows=self.flow_registry.flows,
+            proposals=proposals,
+        )
 
     def _evaluate_reroutes(
         self,
         metrics,
         now: float,
-    ) -> None:
+    ) -> tuple[MigrationProposal, ...]:
+        if self.control_settings.mode == OperatingMode.OBSERVE:
+            return ()
+        proposals = []
         for flow in self.flow_registry.flows:
             migration = self.reroute_manager.evaluate(
                 flow,
@@ -216,6 +263,25 @@ class ACOSDNController(app_manager.RyuApp):
                 now,
             )
             if migration is None:
+                continue
+            proposal = MigrationProposal.from_plan(
+                migration, now
+            )
+            proposals.append(proposal)
+            if (
+                self.control_settings.mode
+                == OperatingMode.RECOMMEND
+            ):
+                self.logger.warning(
+                    "reroute proposal: id=%s old=%s new=%s "
+                    "old_cost=%.4f new_cost=%.4f forced=%s",
+                    proposal.proposal_id,
+                    proposal.old_path,
+                    proposal.new_path,
+                    proposal.old_cost,
+                    proposal.new_cost,
+                    proposal.forced,
+                )
                 continue
             try:
                 new_rules = build_bidirectional_plan(
@@ -270,6 +336,7 @@ class ACOSDNController(app_manager.RyuApp):
                 self.logger.warning(
                     "flow reroute failed: %s", exc
                 )
+        return tuple(proposals)
 
     @staticmethod
     def _request_port_stats(datapath) -> None:

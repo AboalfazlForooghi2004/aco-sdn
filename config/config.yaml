@@ -39,3 +39,9 @@ prediction:
   latency_growth_ratio: 0.30
   recommendation_minimum_confidence: 0.60
   recommendation_validity_seconds: 90
+
+control:
+  mode: recommend
+  api_enabled: true
+  api_host: 127.0.0.1
+  api_port: 8080

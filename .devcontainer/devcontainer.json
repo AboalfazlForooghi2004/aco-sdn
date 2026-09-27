@@ -8,12 +8,17 @@
   ],
   "remoteUser": "vscode",
   "forwardPorts": [
-    6653
+    6653,
+    8080
   ],
   "portsAttributes": {
     "6653": {
       "label": "OpenFlow 1.3",
       "onAutoForward": "ignore"
+    },
+    "8080": {
+      "label": "ACO-SDN read-only API",
+      "onAutoForward": "notify"
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",

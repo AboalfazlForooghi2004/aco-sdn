@@ -230,3 +230,35 @@ do not directly change the network in this phase.
 
 The senior technical review and target architecture are documented in
 `docs/architecture-review.md`.
+
+## Operating modes and read-only API
+
+`config/config.yaml` defines the safe operating mode:
+
+```yaml
+control:
+  mode: recommend
+```
+
+- `observe`: collect, forecast, and explain without route proposals.
+- `recommend`: calculate and expose migration proposals without
+  applying them.
+- `autopilot`: execute threshold-based migrations as before.
+
+The default is `recommend`. A dependency-free read-only API listens on
+`127.0.0.1:8080` by default:
+
+```text
+GET /api/v1/health
+GET /api/v1/topology
+GET /api/v1/metrics
+GET /api/v1/forecasts
+GET /api/v1/recommendations
+GET /api/v1/flows
+GET /api/v1/migrations
+GET /api/v1/snapshot
+```
+
+The immutable snapshot includes a `0..100` network health score and
+lets a future dashboard read controller state without importing Ryu or
+touching mutable protocol objects. No endpoint can modify the network.

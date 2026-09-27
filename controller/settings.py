@@ -8,6 +8,7 @@ import yaml
 from aco.cost import CostWeights
 from aco.optimizer import ACOConfig, AntColonyOptimizer
 from controller.rerouting import ReroutePolicy
+from controller.state import OperatingMode
 from prediction.engine import PredictionConfig
 
 
@@ -23,6 +24,14 @@ class TelemetrySettings:
 class RecommendationSettings:
     minimum_confidence: float
     validity_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class ControlSettings:
+    mode: OperatingMode
+    api_enabled: bool
+    api_host: str
+    api_port: int
 
 
 def _config_path(path: str | Path | None) -> Path:
@@ -155,4 +164,16 @@ def load_recommendation_settings(
                 "recommendation_validity_seconds"
             ]
         ),
+    )
+
+
+def load_control_settings(
+    path: str | Path | None = None,
+) -> ControlSettings:
+    control = _load_document(path)["control"]
+    return ControlSettings(
+        mode=OperatingMode(str(control["mode"]).lower()),
+        api_enabled=bool(control["api_enabled"]),
+        api_host=str(control["api_host"]),
+        api_port=int(control["api_port"]),
     )
