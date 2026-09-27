@@ -34,11 +34,15 @@ from controller.rerouting import (
 from controller.routing import RoutingService
 from controller.settings import (
     load_optimizer,
+    load_prediction_config,
+    load_recommendation_settings,
     load_reroute_policy,
     load_telemetry_settings,
 )
 from controller.telemetry import PortCounters, TelemetryCollector
 from controller.topology import TopologyManager
+from prediction.engine import PredictionEngine
+from recommendation.engine import RecommendationEngine
 
 
 class ACOSDNController(app_manager.RyuApp):
@@ -74,6 +78,23 @@ class ACOSDNController(app_manager.RyuApp):
             self.routing,
             load_reroute_policy(),
         )
+        self.prediction = PredictionEngine(
+            load_prediction_config()
+        )
+        recommendation_settings = (
+            load_recommendation_settings()
+        )
+        self.recommendation_engine = RecommendationEngine(
+            minimum_confidence=(
+                recommendation_settings.minimum_confidence
+            ),
+            validity_seconds=(
+                recommendation_settings.validity_seconds
+            ),
+        )
+        self.current_forecasts = ()
+        self.current_recommendations = ()
+        self._logged_recommendation_ids: set[str] = set()
         self.monitor_thread = hub.spawn(self._monitor)
 
     @set_ev_cls(
@@ -130,19 +151,63 @@ class ACOSDNController(app_manager.RyuApp):
             hub.sleep(
                 self.telemetry_settings.poll_interval_seconds
             )
-            self._evaluate_reroutes()
+            self._run_control_cycle()
 
-    def _current_metrics(self):
-        now = time.monotonic()
+    def _current_metrics(self, now: float | None = None):
+        current_time = (
+            time.monotonic() if now is None else now
+        )
         port_metrics = self.telemetry.link_metrics(
             self.topology,
-            now=now,
+            now=current_time,
         )
-        return self.latency.enrich(port_metrics, now=now)
+        return self.latency.enrich(
+            port_metrics, now=current_time
+        )
 
-    def _evaluate_reroutes(self) -> None:
-        metrics = self._current_metrics()
+    def _run_control_cycle(self) -> None:
         now = time.monotonic()
+        metrics = self._current_metrics(now)
+        self.prediction.observe(metrics, now)
+        self.current_forecasts = (
+            self.prediction.forecast_all(now)
+        )
+        self.current_recommendations = (
+            self.recommendation_engine.generate(
+                self.current_forecasts,
+                self.flow_registry.flows,
+                now,
+            )
+        )
+        current_ids = {
+            item.recommendation_id
+            for item in self.current_recommendations
+        }
+        for recommendation in self.current_recommendations:
+            if (
+                recommendation.recommendation_id
+                in self._logged_recommendation_ids
+            ):
+                continue
+            self.logger.warning(
+                "network recommendation: id=%s title=%s "
+                "urgency=%s confidence=%.2f affected=%s "
+                "signals=%s",
+                recommendation.recommendation_id,
+                recommendation.title,
+                recommendation.urgency,
+                recommendation.confidence,
+                len(recommendation.affected_flows),
+                recommendation.rationale,
+            )
+        self._logged_recommendation_ids = current_ids
+        self._evaluate_reroutes(metrics, now)
+
+    def _evaluate_reroutes(
+        self,
+        metrics,
+        now: float,
+    ) -> None:
         for flow in self.flow_registry.flows:
             migration = self.reroute_manager.evaluate(
                 flow,

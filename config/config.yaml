@@ -29,3 +29,13 @@ telemetry:
   link_capacity_bps: 100000000
   max_age_seconds: 5
   latency_ewma_alpha: 0.30
+
+prediction:
+  history_window_seconds: 300
+  max_samples_per_link: 180
+  horizon_seconds: 60
+  min_samples: 5
+  min_history_seconds: 20
+  latency_growth_ratio: 0.30
+  recommendation_minimum_confidence: 0.60
+  recommendation_validity_seconds: 90

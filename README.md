@@ -207,3 +207,26 @@ dependencies. Codespace creation runs the unit suite, offline
 experiments, starts OVS when supported, and prints the live-lab
 preflight result. The actual Mininet run still depends on the
 capabilities exposed by the Codespaces host.
+
+## Predictive health and recommendations
+
+The controller now keeps a bounded in-memory history for every
+directed link and produces explainable near-term forecasts for
+utilization, loss, and latency. Each forecast includes:
+
+- prediction horizon and sample count;
+- current and predicted values;
+- model-fit and history-based confidence;
+- time to the utilization threshold when calculable;
+- explicit signals such as predicted congestion, packet loss, latency
+  growth, or link unavailability.
+
+The first model is intentionally a bounded linear trend rather than a
+black box. Low-confidence forecasts are suppressed by the
+recommendation layer. Accepted risks produce advisory actions naming
+the affected link and tracked flows, urgency, validity window, and
+whether policy could eventually permit automatic application. Forecasts
+do not directly change the network in this phase.
+
+The senior technical review and target architecture are documented in
+`docs/architecture-review.md`.
