@@ -10,7 +10,6 @@ def run() -> None:
         raise SystemExit(
             "Mininet is required; run this module on Ubuntu"
         ) from exc
-
     net = build_network()
     try:
         net.start()

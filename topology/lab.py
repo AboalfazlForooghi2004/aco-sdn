@@ -5,7 +5,6 @@ def build_network(
     controller_ip: str = "127.0.0.1",
     controller_port: int = 6653,
 ):
-    """Build, but do not start, the reusable Mininet experiment lab."""
     try:
         from mininet.link import TCLink
         from mininet.net import Mininet

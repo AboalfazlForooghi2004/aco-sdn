@@ -114,12 +114,11 @@ def _measure(net, scenario: str) -> LiveResult:
         "iperf3 -c 10.0.0.2 -p 5201 -t 5 -J"
     )
     average, loss = parse_ping(ping_output)
-    throughput = parse_iperf3(iperf_output)
     return LiveResult(
         scenario=scenario,
         ping_average_ms=average,
         packet_loss_percent=loss,
-        throughput_mbps=throughput,
+        throughput_mbps=parse_iperf3(iperf_output),
         measured_at=time.strftime(
             "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
         ),

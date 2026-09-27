@@ -110,48 +110,6 @@ match an existing discovered link. Fresh values populate
 This is a lab estimator rather than hardware timestamping; results can
 include scheduling, OpenFlow channel, and Packet-In processing noise.
 
-## Provisioning choice
-
-For the current single-host Ubuntu lab, Terraform would add complexity
-without managing a useful resource boundary. Ansible is included for
-repeatable package installation, repository checkout, virtual
-environment creation, dependency installation, and unit-test
-verification:
-
-```bash
-cp deploy/ansible/inventory.example.ini \
-  deploy/ansible/inventory.ini
-ansible-playbook \
-  -i deploy/ansible/inventory.ini \
-  deploy/ansible/playbook.yml
-```
-
-Terraform becomes useful when the lab moves to cloud VMs, multiple
-hosts, security groups, or repeatable network infrastructure.
-
-## Live Mininet scenarios
-
-Start the controller:
-
-```bash
-make controller
-```
-
-In a second terminal, run the privileged live experiment:
-
-```bash
-make live
-```
-
-The reusable topology includes `h1` and `h2` as the measured flow.
-`h3` and `h4` are attached to `s2` and `s4` for generating independent
-background congestion. The live runner applies delay/loss through
-`TCLink`, creates congestion with `iperf3`, changes link state for the
-failure scenario, and records ping latency, packet loss, and TCP
-throughput in `results/live_comparison.csv`.
-
-Use `make clean` after interrupted Mininet runs.
-
 ## Offline reproducible experiments
 
 The offline runner compares three algorithms on the same six-switch
@@ -190,11 +148,53 @@ milliseconds.
 
 ## Roadmap
 
-1. integration validation on the provisioned Ubuntu lab
-2. record selected paths and reroute duration in live CSV output
-3. run Shortest Path and Minimum-Cost controller modes
+1. Mininet congestion and link-failure scenario automation
+2. integration validation on Ubuntu/Mininet/OVS
+3. measured CSV export from live controller telemetry
 4. charts generated from measured experiment CSV files
 
 ## Status
 
 Early prototype. Do not deploy in a production network.
+
+## Provisioning and live validation
+
+For the current single-host Ubuntu lab, Ansible is a better fit than
+Terraform. The included playbook installs Mininet, Open vSwitch,
+iperf3, Python dependencies, clones the repository, and executes the
+test suite:
+
+```bash
+cp deploy/ansible/inventory.example.ini \
+  deploy/ansible/inventory.ini
+ansible-playbook \
+  -i deploy/ansible/inventory.ini \
+  deploy/ansible/playbook.yml
+```
+
+Terraform becomes useful when the project needs to create cloud VMs,
+security groups, virtual networks, or a repeatable multi-host lab.
+
+Useful commands:
+
+```bash
+make test
+make offline
+make preflight
+make controller
+make topology
+make live
+make clean
+```
+
+The live topology uses `h1` and `h2` for measurement. `h3` and `h4`
+generate independent background traffic over the upper path. The live
+runner applies congestion, delay, loss, and link failure, then writes
+ping loss/latency and iperf3 throughput to
+`results/live_comparison.csv`.
+
+GitHub CI runs the full unit suite, a simulated OpenFlow integration
+test, and deterministic offline scenarios. The integration simulation
+validates ACO rerouting, make-before-break ordering, FlowMod creation,
+and strict deletion without requiring root or OVS. Run
+`make preflight` on the Ubuntu host before live tests.
