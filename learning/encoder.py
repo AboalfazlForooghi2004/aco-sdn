@@ -120,7 +120,9 @@ class GraphObservationEncoder:
         current_cost = observation.get("current_cost")
         candidate_cost = observation.get("candidate_cost")
         global_features = (
+            float(current_cost is not None),
             float(current_cost or 0.0),
+            float(candidate_cost is not None),
             float(candidate_cost or 0.0),
             float(bool(observation["simulation_safe"])),
             float(len(observation["current_path"]) - 1),

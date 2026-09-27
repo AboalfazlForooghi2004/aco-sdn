@@ -16,6 +16,8 @@ class FakeOfproto:
     OFPIT_APPLY_ACTIONS = 4
     OFPFF_SEND_FLOW_REM = 1
     OFPFC_DELETE_STRICT = 4
+    OFPFC_DELETE = 3
+    OFPTT_ALL = 0xFF
     OFPP_ANY = 0xFFFFFFFF
     OFPG_ANY = 0xFFFFFFFF
 
@@ -152,8 +154,35 @@ class RouteTransactionTests(unittest.TestCase):
             xid=101,
             current_generation=8,
             datapaths=self.datapaths,
+            now=11,
         )
 
+        self.assertIsNone(result)
+        self.assertIn("tx1", self.manager.pending_ids)
+        self.manager.acknowledge(
+            dpid=1,
+            xid=102,
+            current_generation=8,
+            datapaths=self.datapaths,
+            now=12,
+        )
+        self.manager.acknowledge(
+            dpid=2,
+            xid=201,
+            current_generation=8,
+            datapaths=self.datapaths,
+            now=12,
+        )
+        result = self.manager.acknowledge(
+            dpid=3,
+            xid=302,
+            current_generation=8,
+            datapaths=self.datapaths,
+            now=12,
+        )
+
+        self.assertIsNotNone(result)
+        assert result is not None
         self.assertEqual(result.status, "rolled_back")
         self.assertEqual(
             result.reason, "topology_generation_changed"
@@ -176,9 +205,49 @@ class RouteTransactionTests(unittest.TestCase):
             datapaths=self.datapaths,
         )
 
-        self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].status, "rolled_back")
-        self.assertEqual(results[0].reason, "barrier_timeout")
+        self.assertEqual(results, ())
+        self.assertIn("tx1", self.manager.pending_ids)
+        self.manager.acknowledge(
+            dpid=1,
+            xid=102,
+            current_generation=7,
+            datapaths=self.datapaths,
+            now=17,
+        )
+        self.manager.acknowledge(
+            dpid=2,
+            xid=201,
+            current_generation=7,
+            datapaths=self.datapaths,
+            now=17,
+        )
+        result = self.manager.acknowledge(
+            dpid=3,
+            xid=302,
+            current_generation=7,
+            datapaths=self.datapaths,
+            now=17,
+        )
+        self.assertEqual(result.status, "rolled_back")
+        self.assertEqual(result.reason, "barrier_timeout")
+
+    def test_managed_rule_purge_uses_application_cookie(self) -> None:
+        datapath = self.datapaths[1]
+
+        FlowManager.purge_managed(datapath)
+
+        message = datapath.messages[-1]
+        self.assertEqual(
+            message["cookie"],
+            FlowManager.APPLICATION_ID << 48,
+        )
+        self.assertEqual(
+            message["cookie_mask"],
+            FlowManager.APPLICATION_MASK,
+        )
+        self.assertEqual(
+            message["command"], FakeOfproto.OFPFC_DELETE
+        )
 
 
 if __name__ == "__main__":

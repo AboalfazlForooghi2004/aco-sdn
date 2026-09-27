@@ -64,6 +64,7 @@ class LearningQualityTests(unittest.TestCase):
         )
         self.assertEqual(len(encoded.node_features[0]), 4)
         self.assertEqual(len(encoded.edge_features[0]), 6)
+        self.assertEqual(len(encoded.global_features), 7)
         self.assertEqual(encoded.edge_features[1][-1], 1.0)
         self.assertEqual(encoded.edge_features[0][-2], 1.0)
 

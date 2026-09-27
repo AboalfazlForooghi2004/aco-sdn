@@ -1,6 +1,7 @@
 import unittest
 
 from controller.flow_identity import FlowSelector
+from controller.flow_manager import FlowManager
 from controller.rerouting import ActiveFlow, FlowRegistry
 
 
@@ -85,6 +86,69 @@ class FlowIdentityTests(unittest.TestCase):
         self.assertTrue(selector.matches(match))
         match["udp_dst"] = 5353
         self.assertFalse(selector.matches(match))
+
+    def test_cookie_encodes_route_generation(self) -> None:
+        selector = FlowSelector(
+            source_mac="00:00:00:00:00:01",
+            destination_mac="00:00:00:00:00:02",
+        )
+        cookie = FlowManager.cookie_for(selector.key, 17)
+
+        decoded = FlowManager.decode_cookie(cookie)
+
+        self.assertIsNotNone(decoded)
+        self.assertEqual(decoded[0], 17)
+        self.assertIsNone(
+            FlowManager.decode_cookie(0x1234)
+        )
+
+    def test_flow_expires_only_after_all_rules_are_removed(
+        self,
+    ) -> None:
+        selector = FlowSelector(
+            source_mac="00:00:00:00:00:01",
+            destination_mac="00:00:00:00:00:02",
+            eth_type=0x0800,
+            ipv4_source="10.0.0.1",
+            ipv4_destination="10.0.0.2",
+            ip_protocol=6,
+            source_port=10001,
+            destination_port=443,
+        )
+        flow = active(selector)
+        flow = ActiveFlow(
+            **{
+                name: getattr(flow, name)
+                for name in flow.__dataclass_fields__
+                if name
+                not in {
+                    "expected_rule_count",
+                    "route_generation",
+                }
+            },
+            route_generation=3,
+            expected_rule_count=2,
+        )
+        registry = FlowRegistry()
+        registry.register_initial(flow)
+        cookie = FlowManager.cookie_for(flow.key, 3)
+
+        first = registry.mark_rule_removed(
+            match=selector.openflow_match(),
+            cookie=cookie,
+            dpid=1,
+            route_generation=3,
+        )
+        second = registry.mark_rule_removed(
+            match=selector.reverse().openflow_match(),
+            cookie=cookie,
+            dpid=2,
+            route_generation=3,
+        )
+
+        self.assertIsNone(first)
+        self.assertEqual(second, flow)
+        self.assertEqual(registry.flows, ())
 
 
 if __name__ == "__main__":

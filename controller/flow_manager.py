@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from controller.flow_identity import FlowSelector
@@ -13,6 +14,7 @@ class PlannedRule:
     destination_mac: str
     output_port: int
     selector: FlowSelector | None = None
+    cookie: int | None = None
 
 
 def build_bidirectional_plan(
@@ -23,6 +25,7 @@ def build_bidirectional_plan(
     source_host_port: int,
     destination_host_port: int,
     selector: FlowSelector | None = None,
+    cookie: int | None = None,
 ) -> tuple[PlannedRule, ...]:
     if not path:
         raise ValueError("path cannot be empty")
@@ -46,6 +49,7 @@ def build_bidirectional_plan(
                 destination_mac=destination_mac.lower(),
                 output_port=forward_port,
                 selector=selector,
+                cookie=cookie,
             )
         )
         rules.append(
@@ -59,12 +63,16 @@ def build_bidirectional_plan(
                     if selector is not None
                     else None
                 ),
+                cookie=cookie,
             )
         )
     return tuple(rules)
 
 
 class FlowManager:
+    APPLICATION_ID = 0xAC05
+    APPLICATION_MASK = 0xFFFF000000000000
+
     """Translate pure rule plans into OpenFlow 1.3 FlowMod messages."""
 
     def __init__(
@@ -117,7 +125,11 @@ class FlowManager:
             datapath.send_msg(
                 parser.OFPFlowMod(
                     datapath=datapath,
-                    cookie=self.cookie,
+                    cookie=(
+                        rule.cookie
+                        if rule.cookie is not None
+                        else self.cookie
+                    ),
                     priority=self.priority,
                     idle_timeout=self.idle_timeout,
                     flags=(
@@ -156,7 +168,11 @@ class FlowManager:
             datapath.send_msg(
                 parser.OFPFlowMod(
                     datapath=datapath,
-                    cookie=self.cookie,
+                    cookie=(
+                        rule.cookie
+                        if rule.cookie is not None
+                        else self.cookie
+                    ),
                     cookie_mask=0xFFFFFFFFFFFFFFFF,
                     command=datapath.ofproto.OFPFC_DELETE_STRICT,
                     priority=self.priority,
@@ -183,3 +199,48 @@ class FlowManager:
                 "datapath did not assign an xid to barrier request"
             )
         return int(xid)
+
+    @classmethod
+    def purge_managed(cls, datapath) -> None:
+        """Remove stale managed rules during controller reconciliation."""
+        parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto
+        datapath.send_msg(
+            parser.OFPFlowMod(
+                datapath=datapath,
+                cookie=cls.APPLICATION_ID << 48,
+                cookie_mask=cls.APPLICATION_MASK,
+                command=ofproto.OFPFC_DELETE,
+                table_id=ofproto.OFPTT_ALL,
+                out_port=ofproto.OFPP_ANY,
+                out_group=ofproto.OFPG_ANY,
+                match=parser.OFPMatch(),
+            )
+        )
+
+    @classmethod
+    def cookie_for(
+        cls, flow_key: tuple, route_generation: int
+    ) -> int:
+        if not 0 <= route_generation <= 0xFFFF:
+            raise ValueError(
+                "route_generation must fit in 16 bits"
+            )
+        digest = hashlib.blake2s(
+            repr(flow_key).encode("utf-8"),
+            digest_size=4,
+        ).digest()
+        flow_id = int.from_bytes(digest, "big")
+        return (
+            cls.APPLICATION_ID << 48
+            | route_generation << 32
+            | flow_id
+        )
+
+    @classmethod
+    def decode_cookie(
+        cls, cookie: int
+    ) -> tuple[int, int] | None:
+        if cookie >> 48 != cls.APPLICATION_ID:
+            return None
+        return (cookie >> 32) & 0xFFFF, cookie & 0xFFFFFFFF

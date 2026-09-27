@@ -158,6 +158,39 @@ class LearningPipelineTests(unittest.TestCase):
             )
             self.assertEqual(len(load_episodes(path)), 1)
 
+    def test_restart_recovers_pending_outcome(self) -> None:
+        topology, metrics, flow = self.build_context()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "learning.jsonl"
+            first = LearningDataset(path, 10)
+            first.record_decision(
+                decision_id="d1",
+                observed_at=100,
+                flow=flow,
+                candidate_path=(1, 3, 2),
+                current_cost=0.5,
+                candidate_cost=0.3,
+                algorithm="mmas",
+                mode="recommend",
+                simulation_safe=True,
+                metrics=metrics,
+            )
+
+            recovered = LearningDataset(path, 10)
+            settled = recovered.settle_due(
+                observed_at=111,
+                flows=(flow,),
+                topology=topology,
+                metrics=metrics,
+                weights=CostWeights(),
+            )
+
+            self.assertEqual(recovered.pending_count, 0)
+            self.assertEqual(settled, 1)
+            self.assertIsNotNone(
+                load_episodes(path)[0].outcome
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

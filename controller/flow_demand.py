@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Hashable
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,9 +33,9 @@ class FlowDemandEstimator:
         self.ewma_alpha = ewma_alpha
         self.max_age_seconds = max_age_seconds
         self._previous: dict[
-            tuple[str, str], FlowCounters
+            Hashable, FlowCounters
         ] = {}
-        self._demand: dict[tuple[str, str], FlowDemand] = {}
+        self._demand: dict[Hashable, FlowDemand] = {}
 
     @staticmethod
     def _key(
@@ -49,7 +50,15 @@ class FlowDemandEstimator:
         destination_mac: str,
         counters: FlowCounters,
     ) -> FlowDemand | None:
-        key = self._key(source_mac, destination_mac)
+        return self.update_key(
+            self._key(source_mac, destination_mac), counters
+        )
+
+    def update_key(
+        self,
+        key: Hashable,
+        counters: FlowCounters,
+    ) -> FlowDemand | None:
         previous = self._previous.get(key)
         self._previous[key] = counters
         if previous is None:
@@ -91,9 +100,14 @@ class FlowDemandEstimator:
         destination_mac: str,
         now: float,
     ) -> FlowDemand | None:
-        demand = self._demand.get(
-            self._key(source_mac, destination_mac)
+        return self.get_key(
+            self._key(source_mac, destination_mac), now
         )
+
+    def get_key(
+        self, key: Hashable, now: float
+    ) -> FlowDemand | None:
+        demand = self._demand.get(key)
         if demand is None:
             return None
         if now - demand.observed_at > self.max_age_seconds:

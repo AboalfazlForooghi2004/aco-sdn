@@ -131,3 +131,28 @@ model. It exposes sample count, confidence, horizon, predicted values,
 threshold time, and contributing signals. Recommendations are advisory;
 low-confidence forecasts are suppressed and predictive actions are not
 automatically applied.
+
+## Reliability hardening status
+
+The following review findings are now implemented:
+
+- topology-generation validation before rule installation;
+- two-phase install/retire Barrier transactions;
+- Barrier-verified rollback with timeout handling;
+- generation-aware application cookies;
+- persistent transaction-state journal;
+- conservative managed-rule purge when a switch reconnects, allowing
+  clean controller restart recovery;
+- rule-level expiry accounting before removing an active flow;
+- per-port configured capacity override ahead of OpenFlow-reported
+  speed;
+- freshness-derived telemetry confidence and explicit unknown-latency
+  penalty;
+- five-tuple-aware flow identity and demand estimation;
+- recovery of pending learning outcomes after controller restart;
+- Python 3.10/3.11 CI with compilation of every project package.
+
+The primary remaining structural item is decomposition of the Ryu
+application into a thinner protocol adapter and independently testable
+control-loop services. Hardware/OVS failure-injection tests are also
+required before treating the transaction executor as production-ready.

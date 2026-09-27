@@ -37,6 +37,25 @@ class OptimizerTests(unittest.TestCase):
             path_cost(graph, ["s1", "s2", "s4"], weights),
         )
 
+    def test_unknown_latency_receives_configured_penalty(self) -> None:
+        graph = NetworkGraph()
+        graph.add_link(
+            "s1",
+            "s2",
+            LinkMetrics(
+                latency_ms=0,
+                latency_known=False,
+            ),
+        )
+        weights = CostWeights(
+            unknown_latency_penalty=0.75
+        )
+
+        self.assertGreater(
+            path_cost(graph, ["s1", "s2"], weights),
+            weights.hop,
+        )
+
     def test_unavailable_links_are_excluded(self) -> None:
         graph = self.build_graph()
         graph.add_link("s1", "s3", LinkMetrics(available=False))

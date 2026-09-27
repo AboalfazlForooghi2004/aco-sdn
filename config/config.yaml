@@ -19,6 +19,7 @@ cost:
   loss: 0.25
   hop: 0.15
   latency_reference_ms: 100.0
+  unknown_latency_penalty: 0.50
 
 rerouting:
   utilization_threshold: 0.80
@@ -29,6 +30,7 @@ rerouting:
   minimum_improvement: 0.10
   cooldown_seconds: 10
   transaction_timeout_seconds: 3
+  transaction_journal_path: data/transactions.jsonl
 
 telemetry:
   poll_interval_seconds: 2
@@ -39,6 +41,7 @@ telemetry:
   history_path: data/telemetry.jsonl
   history_interval_seconds: 5
   history_max_records: 100000
+  port_capacity_overrides_bps: {}
 
 prediction:
   history_window_seconds: 300

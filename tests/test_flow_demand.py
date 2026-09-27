@@ -72,6 +72,36 @@ class FlowDemandEstimatorTests(unittest.TestCase):
             )
         )
 
+    def test_distinct_five_tuple_keys_do_not_mix(self) -> None:
+        estimator = FlowDemandEstimator(1.0, 5)
+        first_key = ("flow", "tcp", 10001, 443)
+        second_key = ("flow", "tcp", 10002, 443)
+        estimator.update_key(
+            first_key, FlowCounters(0, 0, 0)
+        )
+        estimator.update_key(
+            second_key, FlowCounters(0, 0, 0)
+        )
+        estimator.update_key(
+            first_key, FlowCounters(1_000, 10, 1)
+        )
+        estimator.update_key(
+            second_key, FlowCounters(2_000, 20, 1)
+        )
+
+        self.assertEqual(
+            estimator.get_key(
+                first_key, 1
+            ).bits_per_second,
+            8_000,
+        )
+        self.assertEqual(
+            estimator.get_key(
+                second_key, 1
+            ).bits_per_second,
+            16_000,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

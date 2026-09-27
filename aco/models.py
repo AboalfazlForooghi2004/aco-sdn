@@ -9,6 +9,7 @@ class LinkMetrics:
     """Current measurements for a directed link."""
 
     latency_ms: float = 0.0
+    latency_known: bool = True
     utilization: float = 0.0
     loss: float = 0.0
     available: bool = True

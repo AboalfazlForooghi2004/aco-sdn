@@ -125,9 +125,27 @@ class TelemetryCollectorTests(unittest.TestCase):
             topology, now=12
         )[(1, 2)]
 
-        self.assertEqual(metric.confidence, 0.8)
+        self.assertAlmostEqual(metric.confidence, 0.64)
         self.assertEqual(metric.observed_at, 11)
         self.assertIn("openflow_port_stats", metric.provenance)
+        self.assertFalse(metric.latency_known)
+
+    def test_configured_capacity_override_wins(self) -> None:
+        collector = TelemetryCollector(
+            100_000_000,
+            5,
+            capacity_overrides_bps={(1, 7): 20_000_000},
+        )
+
+        self.assertFalse(
+            collector.update_capacity(
+                1, 7, 10_000_000, "openflow_port_desc"
+            )
+        )
+        self.assertEqual(
+            collector.port_capacity(1, 7),
+            (20_000_000.0, "configured_override"),
+        )
 
 
 if __name__ == "__main__":
