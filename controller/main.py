@@ -34,6 +34,7 @@ from controller.rerouting import (
     RerouteManager,
 )
 from controller.routing import RoutingService
+from controller.simulation import WhatIfSimulator
 from controller.settings import (
     load_control_settings,
     load_event_settings,
@@ -81,6 +82,9 @@ class ACOSDNController(app_manager.RyuApp):
             ),
         )
         self.routing = RoutingService(load_optimizer())
+        self.simulator = WhatIfSimulator(
+            self.routing.optimizer.weights
+        )
         self.flow_manager = FlowManager()
         self.flow_registry = FlowRegistry()
         self.control_settings = load_control_settings()
@@ -310,8 +314,16 @@ class ACOSDNController(app_manager.RyuApp):
             )
             if migration is None:
                 continue
+            simulation = self.simulator.compare(
+                topology=self.topology,
+                metrics=metrics,
+                current_path=flow.path,
+                proposed_path=migration.decision.path,
+            )
             proposal = MigrationProposal.from_plan(
-                migration, now
+                migration,
+                now,
+                simulation=simulation.to_dict(),
             )
             proposals.append(proposal)
             if (
@@ -338,6 +350,7 @@ class ACOSDNController(app_manager.RyuApp):
                         "old_cost": proposal.old_cost,
                         "new_cost": proposal.new_cost,
                         "forced": proposal.forced,
+                        "simulation": proposal.simulation,
                     },
                 )
             if (
@@ -350,9 +363,32 @@ class ACOSDNController(app_manager.RyuApp):
                     proposal.proposal_id,
                     proposal.old_path,
                     proposal.new_path,
-                    proposal.old_cost,
+                    migration.current_cost,
                     proposal.new_cost,
                     proposal.forced,
+                )
+                continue
+            if not simulation.safe_to_apply:
+                self.logger.error(
+                    "reroute blocked by what-if simulation: "
+                    "id=%s violations=%s",
+                    proposal.proposal_id,
+                    simulation.proposed.violations,
+                )
+                self.event_timeline.append(
+                    occurred_at=time.time(),
+                    category="migration",
+                    severity="error",
+                    title="Route migration blocked by simulation",
+                    details={
+                        "proposal_id": proposal.proposal_id,
+                        "violations": list(
+                            simulation.proposed.violations
+                        ),
+                        "warnings": list(
+                            simulation.warnings
+                        ),
+                    },
                 )
                 continue
             try:
