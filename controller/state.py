@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import math
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Any
@@ -25,16 +26,18 @@ class MigrationProposal:
     destination_mac: str
     old_path: tuple[int, ...]
     new_path: tuple[int, ...]
-    old_cost: float
+    old_cost: float | None
     new_cost: float
     forced: bool
     created_at: float
+    simulation: dict[str, Any] | None = None
 
     @classmethod
     def from_plan(
         cls,
         plan: MigrationPlan,
         created_at: float,
+        simulation: dict[str, Any] | None = None,
     ) -> "MigrationProposal":
         flow = plan.flow
         return cls(
@@ -46,10 +49,15 @@ class MigrationProposal:
             destination_mac=flow.destination_mac,
             old_path=flow.path,
             new_path=plan.decision.path,
-            old_cost=plan.current_cost,
+            old_cost=(
+                plan.current_cost
+                if math.isfinite(plan.current_cost)
+                else None
+            ),
             new_cost=plan.decision.cost,
             forced=plan.forced,
             created_at=created_at,
+            simulation=simulation,
         )
 
 

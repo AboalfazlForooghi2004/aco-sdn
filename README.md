@@ -272,3 +272,21 @@ Events survive controller restarts and are also exposed through the
 read-only snapshot API. Every event has an ID, wall-clock timestamp,
 category, severity, title, and structured details suitable for replay
 or automated incident reports.
+
+## What-if route simulation
+
+Every migration proposal now carries a non-mutating comparison of the
+current and proposed paths:
+
+- topology validity and loop detection;
+- link existence and availability;
+- hop count and normalized path cost;
+- accumulated latency and end-to-end loss estimate;
+- average and maximum observed utilization;
+- before/after deltas and cost-improvement ratio.
+
+Autopilot blocks a migration when the proposed path fails simulation.
+The result explicitly warns that the flow's own bandwidth demand is not
+yet modeled and that telemetry is a point-in-time observation. This
+prevents the UI from presenting estimated benefits as guaranteed
+outcomes.
