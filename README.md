@@ -90,6 +90,26 @@ corresponding active-flow record, while controller-initiated deletion
 events are ignored. When a host moves, all tracked paths involving its
 MAC address are explicitly removed before a new route is learned.
 
+## Active link-latency telemetry
+
+On each telemetry cycle, the controller sends:
+
+1. an OpenFlow Echo request to estimate the controller RTT for every
+   connected switch;
+2. a small experimental-EtherType probe over each discovered directed
+   link.
+
+The raw probe duration contains controller-to-switch and
+switch-to-controller delay. Half of each endpoint's measured Echo RTT
+is subtracted before the result is stored. Link samples use a
+configurable EWMA and expire with the same telemetry maximum age.
+Received probes are accepted only when their source/destination ports
+match an existing discovered link. Fresh values populate
+`LinkMetrics.latency_ms` and therefore participate in ACO cost.
+
+This is a lab estimator rather than hardware timestamping; results can
+include scheduling, OpenFlow channel, and Packet-In processing noise.
+
 ## Offline reproducible experiments
 
 The offline runner compares three algorithms on the same six-switch
@@ -128,9 +148,9 @@ milliseconds.
 
 ## Roadmap
 
-1. active link-latency measurement and flow-stat correlation
-2. Mininet congestion and link-failure scenario automation
-3. integration validation on Ubuntu/Mininet/OVS
+1. Mininet congestion and link-failure scenario automation
+2. integration validation on Ubuntu/Mininet/OVS
+3. measured CSV export from live controller telemetry
 4. charts generated from measured experiment CSV files
 
 ## Status

@@ -19,6 +19,13 @@ from controller.flow_manager import (
     FlowManager,
     build_bidirectional_plan,
 )
+from controller.latency import (
+    LatencyTracker,
+    decode_echo,
+    decode_probe,
+    encode_echo,
+    encode_probe,
+)
 from controller.rerouting import (
     ActiveFlow,
     FlowRegistry,
@@ -47,6 +54,14 @@ class ACOSDNController(app_manager.RyuApp):
         self.telemetry = TelemetryCollector(
             link_capacity_bps=(
                 self.telemetry_settings.link_capacity_bps
+            ),
+            max_age_seconds=(
+                self.telemetry_settings.max_age_seconds
+            ),
+        )
+        self.latency = LatencyTracker(
+            ewma_alpha=(
+                self.telemetry_settings.latency_ewma_alpha
             ),
             max_age_seconds=(
                 self.telemetry_settings.max_age_seconds
@@ -110,13 +125,23 @@ class ACOSDNController(app_manager.RyuApp):
         while True:
             for datapath in list(self.datapaths.values()):
                 self._request_port_stats(datapath)
+                self._request_echo(datapath)
+            self._send_link_probes()
             hub.sleep(
                 self.telemetry_settings.poll_interval_seconds
             )
             self._evaluate_reroutes()
 
+    def _current_metrics(self):
+        now = time.monotonic()
+        port_metrics = self.telemetry.link_metrics(
+            self.topology,
+            now=now,
+        )
+        return self.latency.enrich(port_metrics, now=now)
+
     def _evaluate_reroutes(self) -> None:
-        metrics = self.telemetry.link_metrics(self.topology)
+        metrics = self._current_metrics()
         now = time.monotonic()
         for flow in self.flow_registry.flows:
             migration = self.reroute_manager.evaluate(
@@ -190,6 +215,59 @@ class ACOSDNController(app_manager.RyuApp):
             datapath.ofproto.OFPP_ANY,
         )
         datapath.send_msg(request)
+
+    @staticmethod
+    def _request_echo(datapath) -> None:
+        datapath.send_msg(
+            datapath.ofproto_parser.OFPEchoRequest(
+                datapath,
+                data=encode_echo(time.monotonic()),
+            )
+        )
+
+    def _send_link_probes(self) -> None:
+        sent_at = time.monotonic()
+        for (source_dpid, _), ports in (
+            self.topology.links.items()
+        ):
+            datapath = self.datapaths.get(source_dpid)
+            if datapath is None:
+                continue
+            actions = [
+                datapath.ofproto_parser.OFPActionOutput(
+                    ports.source_port
+                )
+            ]
+            datapath.send_msg(
+                datapath.ofproto_parser.OFPPacketOut(
+                    datapath=datapath,
+                    buffer_id=(
+                        datapath.ofproto.OFP_NO_BUFFER
+                    ),
+                    in_port=(
+                        datapath.ofproto.OFPP_CONTROLLER
+                    ),
+                    actions=actions,
+                    data=encode_probe(
+                        source_dpid,
+                        ports.source_port,
+                        sent_at,
+                    ),
+                )
+            )
+
+    @set_ev_cls(
+        ofp_event.EventOFPEchoReply, MAIN_DISPATCHER
+    )
+    def echo_reply_handler(self, ev) -> None:
+        sent_at = decode_echo(ev.msg.data)
+        if sent_at is None:
+            return
+        self.latency.record_echo(
+            ev.msg.datapath.id,
+            sent_at,
+            time.monotonic(),
+        )
 
     @set_ev_cls(
         ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER
@@ -266,6 +344,30 @@ class ACOSDNController(app_manager.RyuApp):
         msg = ev.msg
         datapath = msg.datapath
         in_port = msg.match["in_port"]
+        probe = decode_probe(msg.data)
+        if probe is not None:
+            source_dpid, source_port, sent_at = probe
+            if self.latency.validate_probe_edge(
+                self.topology,
+                source_dpid,
+                source_port,
+                datapath.id,
+                in_port,
+            ):
+                measured = self.latency.record_probe(
+                    source_dpid,
+                    datapath.id,
+                    sent_at,
+                    time.monotonic(),
+                )
+                if measured is not None:
+                    self.logger.debug(
+                        "link latency: %s -> %s %.3f ms",
+                        source_dpid,
+                        datapath.id,
+                        measured,
+                    )
+            return
         parsed = packet.Packet(msg.data)
         frame = parsed.get_protocol(ethernet.ethernet)
         if frame is None or frame.ethertype == ether_types.ETH_TYPE_LLDP:
@@ -313,7 +415,7 @@ class ACOSDNController(app_manager.RyuApp):
             return
 
         try:
-            metrics = self.telemetry.link_metrics(self.topology)
+            metrics = self._current_metrics()
             decision = self.routing.select_path(
                 self.topology,
                 metrics,

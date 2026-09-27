@@ -15,6 +15,7 @@ class TelemetrySettings:
     poll_interval_seconds: float
     link_capacity_bps: float
     max_age_seconds: float
+    latency_ewma_alpha: float
 
 
 def _config_path(path: str | Path | None) -> Path:
@@ -43,6 +44,9 @@ def load_telemetry_settings(
         ),
         link_capacity_bps=float(telemetry["link_capacity_bps"]),
         max_age_seconds=float(telemetry["max_age_seconds"]),
+        latency_ewma_alpha=float(
+            telemetry["latency_ewma_alpha"]
+        ),
     )
 
 
