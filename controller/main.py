@@ -19,9 +19,15 @@ from controller.flow_manager import (
     FlowManager,
     build_bidirectional_plan,
 )
+from controller.rerouting import (
+    ActiveFlow,
+    FlowRegistry,
+    RerouteManager,
+)
 from controller.routing import RoutingService
 from controller.settings import (
     load_optimizer,
+    load_reroute_policy,
     load_telemetry_settings,
 )
 from controller.telemetry import PortCounters, TelemetryCollector
@@ -48,6 +54,11 @@ class ACOSDNController(app_manager.RyuApp):
         )
         self.routing = RoutingService(load_optimizer())
         self.flow_manager = FlowManager()
+        self.flow_registry = FlowRegistry()
+        self.reroute_manager = RerouteManager(
+            self.routing,
+            load_reroute_policy(),
+        )
         self.monitor_thread = hub.spawn(self._monitor)
 
     @set_ev_cls(
@@ -102,6 +113,73 @@ class ACOSDNController(app_manager.RyuApp):
             hub.sleep(
                 self.telemetry_settings.poll_interval_seconds
             )
+            self._evaluate_reroutes()
+
+    def _evaluate_reroutes(self) -> None:
+        metrics = self.telemetry.link_metrics(self.topology)
+        now = time.monotonic()
+        for flow in self.flow_registry.flows:
+            migration = self.reroute_manager.evaluate(
+                flow,
+                self.topology,
+                metrics,
+                now,
+            )
+            if migration is None:
+                continue
+            try:
+                new_rules = build_bidirectional_plan(
+                    topology=self.topology,
+                    path=migration.decision.path,
+                    source_mac=flow.source_mac,
+                    destination_mac=flow.destination_mac,
+                    source_host_port=flow.source_host_port,
+                    destination_host_port=(
+                        flow.destination_host_port
+                    ),
+                )
+                old_rules = build_bidirectional_plan(
+                    topology=self.topology,
+                    path=flow.path,
+                    source_mac=flow.source_mac,
+                    destination_mac=flow.destination_mac,
+                    source_host_port=flow.source_host_port,
+                    destination_host_port=(
+                        flow.destination_host_port
+                    ),
+                )
+                # Make-before-break: add/modify the new path first.
+                self.flow_manager.install(
+                    self.datapaths,
+                    new_rules,
+                )
+                self.flow_manager.delete(
+                    self.datapaths,
+                    old_rules,
+                    exclude_dpids=frozenset(
+                        migration.decision.path
+                    ),
+                )
+                self.flow_registry.replace(
+                    flow,
+                    migration.decision,
+                    changed_at=now,
+                )
+                self.logger.info(
+                    "flow rerouted: %s -> %s old=%s new=%s "
+                    "old_cost=%.4f new_cost=%.4f forced=%s",
+                    flow.source_mac,
+                    flow.destination_mac,
+                    flow.path,
+                    migration.decision.path,
+                    migration.current_cost,
+                    migration.decision.cost,
+                    migration.forced,
+                )
+            except (KeyError, ValueError) as exc:
+                self.logger.warning(
+                    "flow reroute failed: %s", exc
+                )
 
     @staticmethod
     def _request_port_stats(datapath) -> None:
@@ -246,6 +324,19 @@ class ACOSDNController(app_manager.RyuApp):
                 destination_host_port=destination.port,
             )
             self.flow_manager.install(self.datapaths, rules)
+            self.flow_registry.register_initial(
+                ActiveFlow(
+                    source_mac=frame.src.lower(),
+                    destination_mac=frame.dst.lower(),
+                    source_dpid=datapath.id,
+                    destination_dpid=destination.dpid,
+                    source_host_port=in_port,
+                    destination_host_port=destination.port,
+                    path=decision.path,
+                    installed_cost=decision.cost,
+                    last_reroute_at=time.monotonic(),
+                )
+            )
             first_forward_rule = next(
                 rule
                 for rule in rules

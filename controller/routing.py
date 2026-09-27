@@ -28,6 +28,7 @@ class RoutingService:
         metrics: dict[tuple[int, int], LinkMetrics],
         source_dpid: int,
         destination_dpid: int,
+        allow_topology_fallback: bool = True,
     ) -> RoutingDecision:
         if source_dpid == destination_dpid:
             return RoutingDecision(
@@ -49,6 +50,8 @@ class RoutingService:
                 used_fallback=result.used_fallback,
             )
         except ValueError:
+            if not allow_topology_fallback:
+                raise
             fallback = self._minimum_hop_path(
                 topology,
                 source_dpid,

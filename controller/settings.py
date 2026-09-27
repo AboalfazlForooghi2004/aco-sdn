@@ -7,6 +7,7 @@ import yaml
 
 from aco.cost import CostWeights
 from aco.optimizer import ACOConfig, AntColonyOptimizer
+from controller.rerouting import ReroutePolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,4 +72,20 @@ def load_optimizer(
                 cost["latency_reference_ms"]
             ),
         ),
+    )
+
+
+def load_reroute_policy(
+    path: str | Path | None = None,
+) -> ReroutePolicy:
+    rerouting = _load_document(path)["rerouting"]
+    return ReroutePolicy(
+        utilization_threshold=float(
+            rerouting["utilization_threshold"]
+        ),
+        loss_threshold=float(rerouting["loss_threshold"]),
+        minimum_improvement=float(
+            rerouting["minimum_improvement"]
+        ),
+        cooldown_seconds=float(rerouting["cooldown_seconds"]),
     )

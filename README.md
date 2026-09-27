@@ -23,7 +23,8 @@ Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and
 installs bidirectional OpenFlow 1.3 rules for learned hosts. If fresh
 telemetry cannot produce a path, it uses a deterministic minimum-hop
-fallback.
+fallback. Active flows are monitored and migrated when configured
+utilization/loss thresholds are crossed.
 
 ## Layout
 
@@ -75,6 +76,12 @@ series. Once both hosts are learned, it installs end-to-end rules for
 the selected path. MAC addresses observed on inter-switch ports are not
 treated as directly attached hosts.
 
+Dynamic migration uses the thresholds in `config/config.yaml`.
+Non-failure changes must pass both the cooldown and minimum-improvement
+checks. Link unavailability bypasses cooldown. Replacement rules are
+installed before old-only path rules are deleted; rules on shared
+switches are modified in place.
+
 ## Cost model
 
 ```text
@@ -91,8 +98,8 @@ milliseconds.
 ## Roadmap
 
 1. latency measurement and flow-stat correlation
-2. threshold, hysteresis, cooldown, and make-before-break migration
-3. flow lifecycle, explicit modification, and deletion
+2. explicit hysteresis state around rerouting thresholds
+3. flow-removed lifecycle and host-move cleanup
 4. repeatable experiments with CSV results and baseline comparisons
 
 ## Status

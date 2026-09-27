@@ -109,3 +109,35 @@ class FlowManager:
                     instructions=instructions,
                 )
             )
+
+    def delete(
+        self,
+        datapaths: dict[int, object],
+        rules: tuple[PlannedRule, ...],
+        exclude_dpids: frozenset[int] = frozenset(),
+    ) -> None:
+        """Strictly delete old-path rules outside the replacement path."""
+        for rule in rules:
+            if (
+                rule.dpid in exclude_dpids
+                or rule.dpid not in datapaths
+            ):
+                continue
+            datapath = datapaths[rule.dpid]
+            parser = datapath.ofproto_parser
+            match = parser.OFPMatch(
+                eth_src=rule.source_mac,
+                eth_dst=rule.destination_mac,
+            )
+            datapath.send_msg(
+                parser.OFPFlowMod(
+                    datapath=datapath,
+                    cookie=self.cookie,
+                    cookie_mask=0xFFFFFFFFFFFFFFFF,
+                    command=datapath.ofproto.OFPFC_DELETE_STRICT,
+                    priority=self.priority,
+                    out_port=datapath.ofproto.OFPP_ANY,
+                    out_group=datapath.ofproto.OFPG_ANY,
+                    match=match,
+                )
+            )
