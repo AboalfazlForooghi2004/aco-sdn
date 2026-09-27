@@ -42,6 +42,7 @@ from controller.simulation import WhatIfSimulator
 from controller.settings import (
     load_control_settings,
     load_event_settings,
+    load_learning_settings,
     load_optimizer,
     load_prediction_config,
     load_recommendation_settings,
@@ -58,6 +59,7 @@ from controller.telemetry import PortCounters, TelemetryCollector
 from controller.topology import TopologyManager
 from prediction.engine import PredictionEngine
 from recommendation.engine import RecommendationEngine
+from learning.dataset import LearningDataset
 
 
 class ACOSDNController(app_manager.RyuApp):
@@ -105,6 +107,12 @@ class ACOSDNController(app_manager.RyuApp):
         self.flow_manager = FlowManager()
         self.flow_registry = FlowRegistry()
         self.control_settings = load_control_settings()
+        learning_settings = load_learning_settings()
+        self.learning_dataset = LearningDataset(
+            learning_settings.dataset_path,
+            learning_settings.outcome_horizon_seconds,
+            enabled=learning_settings.enabled,
+        )
         event_settings = load_event_settings()
         self.event_timeline = EventTimeline(
             event_settings.path,
@@ -239,7 +247,15 @@ class ACOSDNController(app_manager.RyuApp):
 
     def _run_control_cycle(self) -> None:
         now = time.monotonic()
+        wall_now = time.time()
         metrics = self._current_metrics(now)
+        self.learning_dataset.settle_due(
+            observed_at=wall_now,
+            flows=self.flow_registry.flows,
+            topology=self.topology,
+            metrics=metrics,
+            weights=self.routing.optimizer.weights,
+        )
         self.prediction.observe(metrics, now)
         self.current_forecasts = (
             self.prediction.forecast_all(now)
@@ -303,7 +319,7 @@ class ACOSDNController(app_manager.RyuApp):
         self._logged_recommendation_ids = current_ids
         proposals = self._evaluate_reroutes(metrics, now)
         self.snapshot_store.publish(
-            generated_at=time.time(),
+            generated_at=wall_now,
             mode=self.control_settings.mode,
             switches=tuple(self.topology.switches),
             links=self.topology.links,
@@ -363,6 +379,24 @@ class ACOSDNController(app_manager.RyuApp):
                 proposal.proposal_id
                 not in self._logged_proposal_ids
             ):
+                learning_observed_at = time.time()
+                self.learning_dataset.record_decision(
+                    decision_id=(
+                        f"{proposal.proposal_id}-"
+                        f"{int(learning_observed_at * 1000)}"
+                    ),
+                    observed_at=learning_observed_at,
+                    flow=flow,
+                    candidate_path=proposal.new_path,
+                    current_cost=proposal.old_cost,
+                    candidate_cost=proposal.new_cost,
+                    algorithm=(
+                        self.routing.optimizer.config.strategy
+                    ),
+                    mode=self.control_settings.mode.value,
+                    simulation_safe=simulation.safe_to_apply,
+                    metrics=metrics,
+                )
                 self.event_timeline.append(
                     occurred_at=time.time(),
                     category="migration",

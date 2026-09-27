@@ -37,6 +37,7 @@ config/       Reproducible ACO, cost, and rerouting settings
 controller/   Ryu/OpenFlow adapter (next milestone)
 topology/     Mininet lab topology
 experiments/  Reproducible scenario runners
+learning/     Versioned decision dataset and safe shadow environment
 tests/        Unit tests
 ```
 
@@ -202,6 +203,16 @@ test, and deterministic offline scenarios. The integration simulation
 validates ACO rerouting, make-before-break ordering, FlowMod creation,
 and strict deletion without requiring root or OVS. Run
 `make preflight` on the Ubuntu host before live tests.
+
+## Offline learning safety boundary
+
+The controller records versioned routing decisions and delayed outcomes in
+an append-only JSONL dataset. `learning/` provides a one-step,
+Gymnasium-style offline environment and shadow evaluator that cannot access
+OpenFlow datapaths. Run
+`python scripts/evaluate_shadow.py data/routing-learning.jsonl` to compare
+the built-in keep-path and greedy-safe shadow policies. See
+`docs/offline-learning.md`.
 
 ## GitHub Codespaces
 

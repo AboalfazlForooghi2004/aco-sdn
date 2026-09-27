@@ -58,3 +58,8 @@ events:
 
 simulation:
   utilization_safety_limit: 0.95
+
+learning:
+  enabled: true
+  dataset_path: data/routing-learning.jsonl
+  outcome_horizon_seconds: 30

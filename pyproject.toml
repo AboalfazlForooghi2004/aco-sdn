@@ -14,6 +14,7 @@ packages = [
     "aco",
     "controller",
     "experiments",
+    "learning",
     "prediction",
     "recommendation",
     "topology",

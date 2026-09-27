@@ -46,6 +46,13 @@ class SimulationSettings:
     utilization_safety_limit: float
 
 
+@dataclass(frozen=True, slots=True)
+class LearningSettings:
+    enabled: bool
+    dataset_path: str
+    outcome_horizon_seconds: float
+
+
 def _config_path(path: str | Path | None) -> Path:
     return (
         Path(path)
@@ -219,4 +226,20 @@ def load_simulation_settings(
         utilization_safety_limit=float(
             simulation["utilization_safety_limit"]
         )
+    )
+
+
+def load_learning_settings(
+    path: str | Path | None = None,
+) -> LearningSettings:
+    learning = _load_document(path)["learning"]
+    horizon = float(learning["outcome_horizon_seconds"])
+    if horizon <= 0:
+        raise ValueError(
+            "learning outcome_horizon_seconds must be positive"
+        )
+    return LearningSettings(
+        enabled=bool(learning["enabled"]),
+        dataset_path=str(learning["dataset_path"]),
+        outcome_horizon_seconds=horizon,
     )
