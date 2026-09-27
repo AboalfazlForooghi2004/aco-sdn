@@ -18,6 +18,7 @@ class TelemetrySettings:
     link_capacity_bps: float
     max_age_seconds: float
     latency_ewma_alpha: float
+    flow_demand_ewma_alpha: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,11 @@ class ControlSettings:
 class EventSettings:
     path: str
     max_events: int
+
+
+@dataclass(frozen=True, slots=True)
+class SimulationSettings:
+    utilization_safety_limit: float
 
 
 def _config_path(path: str | Path | None) -> Path:
@@ -68,6 +74,9 @@ def load_telemetry_settings(
         max_age_seconds=float(telemetry["max_age_seconds"]),
         latency_ewma_alpha=float(
             telemetry["latency_ewma_alpha"]
+        ),
+        flow_demand_ewma_alpha=float(
+            telemetry["flow_demand_ewma_alpha"]
         ),
     )
 
@@ -192,4 +201,15 @@ def load_event_settings(
     return EventSettings(
         path=str(events["path"]),
         max_events=int(events["max_events"]),
+    )
+
+
+def load_simulation_settings(
+    path: str | Path | None = None,
+) -> SimulationSettings:
+    simulation = _load_document(path)["simulation"]
+    return SimulationSettings(
+        utilization_safety_limit=float(
+            simulation["utilization_safety_limit"]
+        )
     )

@@ -92,6 +92,48 @@ class WhatIfSimulatorTests(unittest.TestCase):
             "unavailable_link", result.proposed.violations
         )
 
+    def test_estimated_flow_load_can_block_candidate(self) -> None:
+        result = self.simulator.compare(
+            self.topology,
+            self.metrics,
+            current_path=(1, 2, 4),
+            proposed_path=(1, 3, 4),
+            flow_demand_bps=80_000_000,
+            link_capacity_bps=100_000_000,
+        )
+
+        self.assertFalse(result.safe_to_apply)
+        self.assertEqual(
+            result.proposed.maximum_utilization, 1.0
+        )
+        self.assertIn(
+            "projected_utilization_exceeds_safety_limit",
+            result.proposed.violations,
+        )
+        self.assertNotIn(
+            "flow_bandwidth_not_modeled", result.warnings
+        )
+
+    def test_small_estimated_flow_load_is_projected(self) -> None:
+        result = self.simulator.compare(
+            self.topology,
+            self.metrics,
+            current_path=(1, 2, 4),
+            proposed_path=(1, 3, 4),
+            flow_demand_bps=10_000_000,
+            link_capacity_bps=100_000_000,
+        )
+
+        self.assertTrue(result.safe_to_apply)
+        self.assertAlmostEqual(
+            result.proposed.maximum_utilization or 0,
+            0.3,
+        )
+        self.assertIn(
+            "flow_demand_estimated_from_openflow_counters",
+            result.warnings,
+        )
+
     def test_different_endpoints_are_blocked(self) -> None:
         result = self.simulator.compare(
             self.topology,

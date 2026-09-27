@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from aco.cost import CostWeights, path_cost
 from aco.models import LinkMetrics
@@ -40,8 +40,19 @@ class WhatIfResult:
 class WhatIfSimulator:
     """Compare current and proposed paths without mutating the network."""
 
-    def __init__(self, weights: CostWeights) -> None:
+    def __init__(
+        self,
+        weights: CostWeights,
+        utilization_safety_limit: float = 0.95,
+    ) -> None:
+        if not 0.0 < utilization_safety_limit <= 1.0:
+            raise ValueError(
+                "utilization_safety_limit must be in (0, 1]"
+            )
         self.weights = weights
+        self.utilization_safety_limit = (
+            utilization_safety_limit
+        )
 
     def compare(
         self,
@@ -49,12 +60,53 @@ class WhatIfSimulator:
         metrics: dict[tuple[int, int], LinkMetrics],
         current_path: tuple[int, ...],
         proposed_path: tuple[int, ...],
+        flow_demand_bps: float | None = None,
+        link_capacity_bps: float | None = None,
     ) -> WhatIfResult:
         current = self._assess(
             topology, metrics, current_path
         )
+        projected_metrics = dict(metrics)
+        warnings = [
+            "metrics_are_point_in_time_observations",
+        ]
+        if flow_demand_bps is None:
+            warnings.append("flow_bandwidth_not_modeled")
+        else:
+            if link_capacity_bps is None or link_capacity_bps <= 0:
+                raise ValueError(
+                    "positive link_capacity_bps is required "
+                    "when flow demand is provided"
+                )
+            demand_fraction = max(
+                flow_demand_bps, 0.0
+            ) / link_capacity_bps
+            current_edges = set(
+                zip(current_path, current_path[1:])
+            )
+            for edge in zip(
+                proposed_path, proposed_path[1:]
+            ):
+                if edge in current_edges:
+                    continue
+                value = projected_metrics.get(edge)
+                if value is None:
+                    continue
+                projected_metrics[edge] = replace(
+                    value,
+                    utilization=min(
+                        1.0,
+                        value.utilization + demand_fraction,
+                    ),
+                )
+            warnings.extend(
+                (
+                    "flow_demand_estimated_from_openflow_counters",
+                    "global_link_capacity_assumed",
+                )
+            )
         proposed = self._assess(
-            topology, metrics, proposed_path
+            topology, projected_metrics, proposed_path
         )
         endpoint_mismatch = (
             bool(current_path)
@@ -64,16 +116,31 @@ class WhatIfSimulator:
                 or current_path[-1] != proposed_path[-1]
             )
         )
-        warnings = [
-            "flow_bandwidth_not_modeled",
-            "metrics_are_point_in_time_observations",
-        ]
         if endpoint_mismatch:
             warnings.append("path_endpoints_do_not_match")
+        exceeds_safety_limit = (
+            proposed.maximum_utilization is not None
+            and proposed.maximum_utilization
+            > self.utilization_safety_limit
+        )
+        if exceeds_safety_limit:
+            proposed = replace(
+                proposed,
+                violations=tuple(
+                    dict.fromkeys(
+                        (
+                            *proposed.violations,
+                            "projected_utilization_exceeds_"
+                            "safety_limit",
+                        )
+                    )
+                ),
+            )
         safe = (
             proposed.valid
             and proposed.available
             and not endpoint_mismatch
+            and not exceeds_safety_limit
         )
         return WhatIfResult(
             safe_to_apply=safe,

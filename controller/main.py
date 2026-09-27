@@ -17,6 +17,10 @@ from ryu.topology import event
 
 from controller.api import SnapshotApiServer
 from controller.events import EventTimeline
+from controller.flow_demand import (
+    FlowCounters,
+    FlowDemandEstimator,
+)
 from controller.flow_manager import (
     FlowManager,
     build_bidirectional_plan,
@@ -42,6 +46,7 @@ from controller.settings import (
     load_prediction_config,
     load_recommendation_settings,
     load_reroute_policy,
+    load_simulation_settings,
     load_telemetry_settings,
 )
 from controller.state import (
@@ -73,6 +78,14 @@ class ACOSDNController(app_manager.RyuApp):
                 self.telemetry_settings.max_age_seconds
             ),
         )
+        self.flow_demand = FlowDemandEstimator(
+            ewma_alpha=(
+                self.telemetry_settings.flow_demand_ewma_alpha
+            ),
+            max_age_seconds=(
+                self.telemetry_settings.max_age_seconds
+            ),
+        )
         self.latency = LatencyTracker(
             ewma_alpha=(
                 self.telemetry_settings.latency_ewma_alpha
@@ -82,8 +95,12 @@ class ACOSDNController(app_manager.RyuApp):
             ),
         )
         self.routing = RoutingService(load_optimizer())
+        simulation_settings = load_simulation_settings()
         self.simulator = WhatIfSimulator(
-            self.routing.optimizer.weights
+            self.routing.optimizer.weights,
+            utilization_safety_limit=(
+                simulation_settings.utilization_safety_limit
+            ),
         )
         self.flow_manager = FlowManager()
         self.flow_registry = FlowRegistry()
@@ -200,6 +217,7 @@ class ACOSDNController(app_manager.RyuApp):
         while True:
             for datapath in list(self.datapaths.values()):
                 self._request_port_stats(datapath)
+                self._request_flow_stats(datapath)
                 self._request_echo(datapath)
             self._send_link_probes()
             hub.sleep(
@@ -319,6 +337,21 @@ class ACOSDNController(app_manager.RyuApp):
                 metrics=metrics,
                 current_path=flow.path,
                 proposed_path=migration.decision.path,
+                flow_demand_bps=(
+                    demand.bits_per_second
+                    if (
+                        demand := self.flow_demand.get(
+                            flow.source_mac,
+                            flow.destination_mac,
+                            now,
+                        )
+                    )
+                    is not None
+                    else None
+                ),
+                link_capacity_bps=(
+                    self.telemetry_settings.link_capacity_bps
+                ),
             )
             proposal = MigrationProposal.from_plan(
                 migration,
@@ -489,6 +522,14 @@ class ACOSDNController(app_manager.RyuApp):
         datapath.send_msg(request)
 
     @staticmethod
+    def _request_flow_stats(datapath) -> None:
+        datapath.send_msg(
+            datapath.ofproto_parser.OFPFlowStatsRequest(
+                datapath
+            )
+        )
+
+    @staticmethod
     def _request_echo(datapath) -> None:
         datapath.send_msg(
             datapath.ofproto_parser.OFPEchoRequest(
@@ -571,6 +612,46 @@ class ACOSDNController(app_manager.RyuApp):
             datapath.id,
             updated,
         )
+
+    @set_ev_cls(
+        ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER
+    )
+    def flow_stats_reply_handler(self, ev) -> None:
+        datapath = ev.msg.datapath
+        observed_at = time.monotonic()
+        for stat in ev.msg.body:
+            if stat.priority != self.flow_manager.priority:
+                continue
+            source_mac = stat.match.get("eth_src")
+            destination_mac = stat.match.get("eth_dst")
+            if source_mac is None or destination_mac is None:
+                continue
+            source_mac = str(source_mac).lower()
+            destination_mac = str(destination_mac).lower()
+            for flow in self.flow_registry.flows:
+                forward_ingress = (
+                    datapath.id == flow.source_dpid
+                    and source_mac == flow.source_mac
+                    and destination_mac
+                    == flow.destination_mac
+                )
+                reverse_ingress = (
+                    datapath.id == flow.destination_dpid
+                    and source_mac == flow.destination_mac
+                    and destination_mac == flow.source_mac
+                )
+                if not (forward_ingress or reverse_ingress):
+                    continue
+                self.flow_demand.update(
+                    source_mac,
+                    destination_mac,
+                    FlowCounters(
+                        byte_count=stat.byte_count,
+                        packet_count=stat.packet_count,
+                        observed_at=observed_at,
+                    ),
+                )
+                break
 
     @set_ev_cls(event.EventSwitchEnter)
     def switch_enter_handler(self, ev) -> None:

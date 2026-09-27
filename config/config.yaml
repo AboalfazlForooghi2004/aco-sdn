@@ -29,6 +29,7 @@ telemetry:
   link_capacity_bps: 100000000
   max_age_seconds: 5
   latency_ewma_alpha: 0.30
+  flow_demand_ewma_alpha: 0.40
 
 prediction:
   history_window_seconds: 300
@@ -49,3 +50,6 @@ control:
 events:
   path: data/events.jsonl
   max_events: 1000
+
+simulation:
+  utilization_safety_limit: 0.95
