@@ -22,3 +22,8 @@ rerouting:
   minimum_improvement: 0.10
   cooldown_seconds: 10
   telemetry_max_age_seconds: 5
+
+telemetry:
+  poll_interval_seconds: 2
+  link_capacity_bps: 100000000
+  max_age_seconds: 5

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import time
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import (
     CONFIG_DISPATCHER,
+    DEAD_DISPATCHER,
     MAIN_DISPATCHER,
     set_ev_cls,
 )
+from ryu.lib import hub
 from ryu.lib.packet import ethernet, ether_types, packet
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
+from controller.settings import load_telemetry_settings
+from controller.telemetry import PortCounters, TelemetryCollector
 from controller.topology import TopologyManager
 
 
@@ -22,6 +28,17 @@ class ACOSDNController(app_manager.RyuApp):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.topology = TopologyManager()
+        self.datapaths = {}
+        self.telemetry_settings = load_telemetry_settings()
+        self.telemetry = TelemetryCollector(
+            link_capacity_bps=(
+                self.telemetry_settings.link_capacity_bps
+            ),
+            max_age_seconds=(
+                self.telemetry_settings.max_age_seconds
+            ),
+        )
+        self.monitor_thread = hub.spawn(self._monitor)
 
     @set_ev_cls(
         ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER
@@ -55,6 +72,66 @@ class ACOSDNController(app_manager.RyuApp):
                 match=match,
                 instructions=instructions,
             )
+        )
+
+    @set_ev_cls(
+        ofp_event.EventOFPStateChange,
+        [MAIN_DISPATCHER, DEAD_DISPATCHER],
+    )
+    def state_change_handler(self, ev) -> None:
+        datapath = ev.datapath
+        if ev.state == MAIN_DISPATCHER:
+            self.datapaths[datapath.id] = datapath
+        elif ev.state == DEAD_DISPATCHER:
+            self.datapaths.pop(datapath.id, None)
+
+    def _monitor(self) -> None:
+        while True:
+            for datapath in list(self.datapaths.values()):
+                self._request_port_stats(datapath)
+            hub.sleep(
+                self.telemetry_settings.poll_interval_seconds
+            )
+
+    @staticmethod
+    def _request_port_stats(datapath) -> None:
+        parser = datapath.ofproto_parser
+        request = parser.OFPPortStatsRequest(
+            datapath,
+            0,
+            datapath.ofproto.OFPP_ANY,
+        )
+        datapath.send_msg(request)
+
+    @set_ev_cls(
+        ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER
+    )
+    def port_stats_reply_handler(self, ev) -> None:
+        datapath = ev.msg.datapath
+        observed_at = time.monotonic()
+        updated = 0
+        for stat in ev.msg.body:
+            if stat.port_no == datapath.ofproto.OFPP_LOCAL:
+                continue
+            result = self.telemetry.update(
+                datapath.id,
+                stat.port_no,
+                PortCounters(
+                    rx_bytes=stat.rx_bytes,
+                    tx_bytes=stat.tx_bytes,
+                    rx_packets=stat.rx_packets,
+                    tx_packets=stat.tx_packets,
+                    rx_dropped=stat.rx_dropped,
+                    tx_dropped=stat.tx_dropped,
+                    observed_at=observed_at,
+                ),
+            )
+            if result is not None:
+                updated += 1
+        self.logger.debug(
+            "port telemetry updated: dpid=%s ports=%s",
+            datapath.id,
+            updated,
         )
 
     @set_ev_cls(event.EventSwitchEnter)
