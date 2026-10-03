@@ -41,12 +41,14 @@ from controller.flow_manager import (
 from controller.latency import (
     LatencyTracker,
     decode_echo,
-    decode_probe,
     encode_echo,
-    encode_probe,
 )
+from controller.link_probe_service import LinkProbeService
 from controller.openflow_protocol import OpenFlowProtocol
 from controller.packet_flow import PacketFlowService
+from controller.reroute_evaluation import (
+    RerouteEvaluationService,
+)
 from controller.rerouting import (
     FlowRegistry,
     RerouteManager,
@@ -200,6 +202,15 @@ class ACOSDNController(app_manager.RyuApp):
             self.routing,
             load_reroute_policy(),
         )
+        self.reroute_evaluation = RerouteEvaluationService(
+            reroute_manager=self.reroute_manager,
+            simulator=self.simulator,
+            flow_demand=self.flow_demand,
+            telemetry=self.telemetry,
+            default_link_capacity_bps=(
+                self.telemetry_settings.link_capacity_bps
+            ),
+        )
         self.prediction = PredictionEngine(
             load_prediction_config()
         )
@@ -227,6 +238,7 @@ class ACOSDNController(app_manager.RyuApp):
         self.current_forecasts = ()
         self.current_recommendations = ()
         self.openflow = OpenFlowProtocol()
+        self.link_probes = LinkProbeService(self.latency)
         self.monitor_thread = hub.spawn(self._monitor)
         if self.api_server is not None:
             host, port = self.api_server.address
@@ -275,7 +287,11 @@ class ACOSDNController(app_manager.RyuApp):
                     datapath,
                     encode_echo(time.monotonic()),
                 )
-            self._send_link_probes()
+            self.link_probes.send(
+                topology=self.topology,
+                datapaths=self.datapaths,
+                sent_at=time.monotonic(),
+            )
             hub.sleep(
                 self.telemetry_settings.poll_interval_seconds
             )
@@ -334,47 +350,18 @@ class ACOSDNController(app_manager.RyuApp):
         if self.control_settings.mode == OperatingMode.OBSERVE:
             return ()
         proposals = []
-        for flow in self.flow_registry.flows:
-            if self.change_service.is_pending(flow):
-                continue
-            migration = self.reroute_manager.evaluate(
-                flow,
-                self.topology,
-                metrics,
-                now,
-            )
-            if migration is None:
-                continue
-            simulation = self.simulator.compare(
-                topology=self.topology,
-                metrics=metrics,
-                current_path=flow.path,
-                proposed_path=migration.decision.path,
-                flow_demand_bps=(
-                    demand.bits_per_second
-                    if (
-                        demand := self.flow_demand.get_key(
-                            flow.key,
-                            now,
-                        )
-                    )
-                    is not None
-                    else None
-                ),
-                link_capacity_bps=(
-                    self.telemetry_settings.link_capacity_bps
-                ),
-                link_capacities_bps=(
-                    self.telemetry.link_capacities(
-                        self.topology
-                    )
-                ),
-            )
-            proposal = MigrationProposal.from_plan(
-                migration,
-                now,
-                simulation=simulation.to_dict(),
-            )
+        candidates = self.reroute_evaluation.evaluate(
+            flows=self.flow_registry.flows,
+            topology=self.topology,
+            metrics=metrics,
+            now=now,
+            is_pending=self.change_service.is_pending,
+        )
+        for candidate in candidates:
+            flow = candidate.flow
+            migration = candidate.migration
+            simulation = candidate.simulation
+            proposal = candidate.proposal
             proposals.append(proposal)
             if self.audit.proposal(
                 proposal, occurred_at=time.time()
@@ -500,37 +487,6 @@ class ACOSDNController(app_manager.RyuApp):
             datapath.id,
             updated,
         )
-
-    def _send_link_probes(self) -> None:
-        sent_at = time.monotonic()
-        for (source_dpid, _), ports in (
-            self.topology.links.items()
-        ):
-            datapath = self.datapaths.get(source_dpid)
-            if datapath is None:
-                continue
-            actions = [
-                datapath.ofproto_parser.OFPActionOutput(
-                    ports.source_port
-                )
-            ]
-            datapath.send_msg(
-                datapath.ofproto_parser.OFPPacketOut(
-                    datapath=datapath,
-                    buffer_id=(
-                        datapath.ofproto.OFP_NO_BUFFER
-                    ),
-                    in_port=(
-                        datapath.ofproto.OFPP_CONTROLLER
-                    ),
-                    actions=actions,
-                    data=encode_probe(
-                        source_dpid,
-                        ports.source_port,
-                        sent_at,
-                    ),
-                )
-            )
 
     @set_ev_cls(
         ofp_event.EventOFPEchoReply, MAIN_DISPATCHER
@@ -680,29 +636,21 @@ class ACOSDNController(app_manager.RyuApp):
         msg = ev.msg
         datapath = msg.datapath
         in_port = msg.match["in_port"]
-        probe = decode_probe(msg.data)
+        probe = self.link_probes.receive(
+            payload=msg.data,
+            topology=self.topology,
+            destination_dpid=datapath.id,
+            destination_port=in_port,
+            received_at=time.monotonic(),
+        )
         if probe is not None:
-            source_dpid, source_port, sent_at = probe
-            if self.latency.validate_probe_edge(
-                self.topology,
-                source_dpid,
-                source_port,
-                datapath.id,
-                in_port,
-            ):
-                measured = self.latency.record_probe(
-                    source_dpid,
-                    datapath.id,
-                    sent_at,
-                    time.monotonic(),
+            if probe.latency_ms is not None:
+                self.logger.debug(
+                    "link latency: %s -> %s %.3f ms",
+                    probe.source_dpid,
+                    probe.destination_dpid,
+                    probe.latency_ms,
                 )
-                if measured is not None:
-                    self.logger.debug(
-                        "link latency: %s -> %s %.3f ms",
-                        source_dpid,
-                        datapath.id,
-                        measured,
-                    )
             return
         parsed = packet.Packet(msg.data)
         frame = parsed.get_protocol(ethernet.ethernet)

@@ -42,6 +42,9 @@ and the initial Ryu discovery adapter:
   `ControllerAuditService`, and `OpenFlowProtocol` boundaries for
   transaction lifecycle, durable operator events, common OpenFlow
   requests, packet-out handling, and match extraction.
+- independently tested `LinkProbeService` and
+  `RerouteEvaluationService` for active-latency probe validation and
+  demand-aware, non-mutating migration candidate evaluation.
 
 Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and
