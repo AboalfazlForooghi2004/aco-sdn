@@ -27,6 +27,7 @@ from controller.change_service import (
     RouteChangeOutcome,
     RouteChangeService,
 )
+from controller.control_cycle import ControlCycleService
 from controller.events import EventTimeline
 from controller.flow_demand import (
     FlowCounters,
@@ -35,7 +36,6 @@ from controller.flow_demand import (
 from controller.flow_identity import FlowSelector
 from controller.flow_manager import (
     FlowManager,
-    build_bidirectional_plan,
 )
 from controller.latency import (
     LatencyTracker,
@@ -44,8 +44,8 @@ from controller.latency import (
     encode_echo,
     encode_probe,
 )
+from controller.packet_flow import PacketFlowService
 from controller.rerouting import (
-    ActiveFlow,
     FlowRegistry,
     RerouteManager,
 )
@@ -149,6 +149,10 @@ class ACOSDNController(app_manager.RyuApp):
             journal=self.transaction_journal,
         )
         self.flow_registry = FlowRegistry()
+        self.packet_flow = PacketFlowService(
+            self.flow_manager,
+            self.flow_registry,
+        )
         self.change_service = RouteChangeService(
             self.flow_manager,
             self.route_transactions,
@@ -218,6 +222,16 @@ class ACOSDNController(app_manager.RyuApp):
             validity_seconds=(
                 recommendation_settings.validity_seconds
             ),
+        )
+        self.control_cycle = ControlCycleService(
+            telemetry=self.telemetry,
+            latency=self.latency,
+            telemetry_history=self.telemetry_history,
+            prediction=self.prediction,
+            recommendation=self.recommendation_engine,
+            learning_dataset=self.learning_dataset,
+            flow_registry=self.flow_registry,
+            optimizer_weights=self.routing.optimizer.weights,
         )
         self.current_forecasts = ()
         self.current_recommendations = ()
@@ -303,12 +317,8 @@ class ACOSDNController(app_manager.RyuApp):
         current_time = (
             time.monotonic() if now is None else now
         )
-        port_metrics = self.telemetry.link_metrics(
-            self.topology,
-            now=current_time,
-        )
-        return self.latency.enrich(
-            port_metrics, now=current_time
+        return self.control_cycle.current_metrics(
+            self.topology, current_time
         )
 
     def _run_control_cycle(self) -> None:
@@ -320,29 +330,15 @@ class ACOSDNController(app_manager.RyuApp):
             datapaths=self.datapaths,
         ):
             self._record_route_change_outcome(outcome)
-        metrics = self._current_metrics(now)
-        self.telemetry_history.append(
-            observed_at=wall_now,
-            topology_generation=self.topology.generation,
-            metrics=metrics,
-        )
-        self.learning_dataset.settle_due(
-            observed_at=wall_now,
-            flows=self.flow_registry.flows,
+        analysis = self.control_cycle.analyze(
             topology=self.topology,
-            metrics=metrics,
-            weights=self.routing.optimizer.weights,
+            monotonic_now=now,
+            wall_now=wall_now,
         )
-        self.prediction.observe(metrics, now)
-        self.current_forecasts = (
-            self.prediction.forecast_all(now)
-        )
+        metrics = analysis.metrics
+        self.current_forecasts = analysis.forecasts
         self.current_recommendations = (
-            self.recommendation_engine.generate(
-                self.current_forecasts,
-                self.flow_registry.flows,
-                now,
-            )
+            analysis.recommendations
         )
         current_ids = {
             item.recommendation_id
@@ -972,52 +968,22 @@ class ACOSDNController(app_manager.RyuApp):
         try:
             metrics = self._current_metrics()
             selector = self._flow_selector(parsed, frame)
-            route_generation = (
-                self.flow_registry.next_route_generation(
-                    selector.key
-                )
-            )
             decision = self.routing.select_path(
                 self.topology,
                 metrics,
                 datapath.id,
                 destination.dpid,
             )
-            rules = build_bidirectional_plan(
+            installation = self.packet_flow.install_initial(
                 topology=self.topology,
-                path=decision.path,
-                source_mac=frame.src,
-                destination_mac=frame.dst,
+                datapaths=self.datapaths,
+                decision=decision,
+                selector=selector,
+                source_dpid=datapath.id,
+                destination_dpid=destination.dpid,
                 source_host_port=in_port,
                 destination_host_port=destination.port,
-                selector=selector,
-                cookie=self.flow_manager.cookie_for(
-                    selector.key, route_generation
-                ),
-            )
-            self.flow_manager.install(self.datapaths, rules)
-            self.flow_registry.register_initial(
-                ActiveFlow(
-                    source_mac=frame.src.lower(),
-                    destination_mac=frame.dst.lower(),
-                    source_dpid=datapath.id,
-                    destination_dpid=destination.dpid,
-                    source_host_port=in_port,
-                    destination_host_port=destination.port,
-                    path=decision.path,
-                    installed_cost=decision.cost,
-                    last_reroute_at=time.monotonic(),
-                    selector=selector,
-                    route_generation=route_generation,
-                    expected_rule_count=len(rules),
-                )
-            )
-            first_forward_rule = next(
-                rule
-                for rule in rules
-                if rule.dpid == datapath.id
-                and rule.source_mac == frame.src.lower()
-                and rule.destination_mac == frame.dst.lower()
+                installed_at=time.monotonic(),
             )
             self.logger.info(
                 "route installed: %s -> %s path=%s "
@@ -1031,7 +997,7 @@ class ACOSDNController(app_manager.RyuApp):
             self._send_packet_out(
                 msg,
                 in_port,
-                first_forward_rule.output_port,
+                installation.first_output_port,
             )
         except (KeyError, ValueError, StopIteration) as exc:
             self.logger.warning(
@@ -1045,28 +1011,16 @@ class ACOSDNController(app_manager.RyuApp):
             )
 
     def _cleanup_host_flows(self, mac: str) -> None:
-        for flow in self.flow_registry.flows_for_host(mac):
-            try:
-                rules = build_bidirectional_plan(
-                    topology=self.topology,
-                    path=flow.path,
-                    source_mac=flow.source_mac,
-                    destination_mac=flow.destination_mac,
-                    source_host_port=flow.source_host_port,
-                    destination_host_port=(
-                        flow.destination_host_port
-                    ),
-                    selector=flow.selector,
-                    cookie=self.flow_manager.cookie_for(
-                        flow.key, flow.route_generation
-                    ),
-                )
-                self.flow_manager.delete(self.datapaths, rules)
-            except KeyError as exc:
-                self.logger.debug(
-                    "partial host-move cleanup: %s", exc
-                )
-            self.flow_registry.remove(flow)
+        cleanup = self.packet_flow.cleanup_host(
+            topology=self.topology,
+            datapaths=self.datapaths,
+            mac=mac,
+        )
+        for error in cleanup.errors:
+            self.logger.debug(
+                "partial host-move cleanup: %s", error
+            )
+        for flow in cleanup.removed:
             self.logger.info(
                 "flow removed after host move: %s -> %s",
                 flow.source_mac,
@@ -1103,14 +1057,10 @@ class ACOSDNController(app_manager.RyuApp):
             )
             if msg.match.get(name) is not None
         }
-        decoded = self.flow_manager.decode_cookie(msg.cookie)
-        removed = self.flow_registry.mark_rule_removed(
+        removed = self.packet_flow.rule_removed(
             match=match,
             cookie=msg.cookie,
             dpid=msg.datapath.id,
-            route_generation=(
-                decoded[0] if decoded is not None else None
-            ),
         )
         if removed is not None:
             self.logger.info(

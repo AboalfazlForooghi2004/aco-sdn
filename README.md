@@ -35,6 +35,9 @@ and the initial Ryu discovery adapter:
 - five-tuple-aware flow-demand estimation, explicit per-port capacity
   overrides, freshness-derived confidence, and an unknown-latency
   routing penalty.
+- independently tested `ControlCycleService` and `PacketFlowService`
+  for telemetry/prediction analysis, initial rule installation,
+  host cleanup, and rule-expiry accounting.
 
 Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and
