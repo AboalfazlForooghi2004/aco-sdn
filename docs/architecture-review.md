@@ -29,8 +29,10 @@ control loop.
 Progress: the control cycle, packet-flow lifecycle, route-change
 transactions, operator audit trail, and common OpenFlow message
 construction now live behind independently tested services. The Ryu
-application remains the event-wiring composition root; link-probe
-transport and reroute-candidate orchestration are the next extraction
+application remains the event-wiring composition root. Active-link
+probe transport and reroute-candidate orchestration are now isolated
+in `LinkProbeService` and `RerouteEvaluationService`; FlowStats
+decoding and topology-event translation are the next extraction
 targets.
 
 Recommended boundary:
@@ -163,7 +165,9 @@ The primary remaining structural item is completing decomposition of
 the Ryu application. `ControlCycleService`, `PacketFlowService`,
 `RouteChangeService`, `ControllerAuditService`, and
 `OpenFlowProtocol` now isolate most policy, lifecycle, audit, and
-protocol-message responsibilities. Link probing and reroute-candidate
-orchestration remain in the adapter. Hardware/OVS failure-injection
-tests are also required before treating the transaction executor as
-production-ready.
+protocol-message responsibilities. `LinkProbeService` and
+`RerouteEvaluationService` additionally isolate active latency
+measurement and demand-aware candidate construction. FlowStats
+decoding and topology-event translation remain in the adapter.
+Hardware/OVS failure-injection tests are also required before treating
+the transaction executor as production-ready.
