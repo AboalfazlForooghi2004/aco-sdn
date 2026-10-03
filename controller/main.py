@@ -23,6 +23,7 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
 from controller.api import SnapshotApiServer
+from controller.audit_service import ControllerAuditService
 from controller.change_service import (
     RouteChangeOutcome,
     RouteChangeService,
@@ -44,6 +45,7 @@ from controller.latency import (
     encode_echo,
     encode_probe,
 )
+from controller.openflow_protocol import OpenFlowProtocol
 from controller.packet_flow import PacketFlowService
 from controller.rerouting import (
     FlowRegistry,
@@ -170,30 +172,19 @@ class ACOSDNController(app_manager.RyuApp):
             event_settings.path,
             event_settings.max_events,
         )
-        self.event_timeline.append(
-            occurred_at=time.time(),
-            category="controller",
-            severity="info",
-            title="Controller started",
-            details={
-                "mode": self.control_settings.mode.value
-            },
+        self.audit = ControllerAuditService(
+            self.event_timeline, self.logger
         )
-        if self._recovered_unresolved_transactions:
-            self.event_timeline.append(
-                occurred_at=time.time(),
-                category="controller",
-                severity="warning",
-                title="Unfinished route transactions recovered",
-                details={
-                    "transaction_ids": list(
-                        self._recovered_unresolved_transactions
-                    ),
-                    "action": (
-                        "purge managed rules as switches reconnect"
-                    ),
-                },
-            )
+        self.audit.controller_started(
+            occurred_at=time.time(),
+            mode=self.control_settings.mode.value,
+        )
+        self.audit.recovered_transactions(
+            occurred_at=time.time(),
+            transaction_ids=(
+                self._recovered_unresolved_transactions
+            ),
+        )
         self.snapshot_store = SnapshotStore(
             self.control_settings.mode
         )
@@ -235,8 +226,7 @@ class ACOSDNController(app_manager.RyuApp):
         )
         self.current_forecasts = ()
         self.current_recommendations = ()
-        self._logged_recommendation_ids: set[str] = set()
-        self._logged_proposal_ids: set[str] = set()
+        self.openflow = OpenFlowProtocol()
         self.monitor_thread = hub.spawn(self._monitor)
         if self.api_server is not None:
             host, port = self.api_server.address
@@ -261,34 +251,9 @@ class ACOSDNController(app_manager.RyuApp):
         self.topology.add_switch(datapath.id)
         self.flow_manager.purge_managed(datapath)
         self.flow_manager.request_barrier(datapath)
-        self._install_table_miss(datapath)
-        self._request_port_desc(datapath)
+        self.openflow.install_table_miss(datapath)
+        self.openflow.request_port_desc(datapath)
         self.logger.info("switch connected: dpid=%s", datapath.id)
-
-    def _install_table_miss(self, datapath) -> None:
-        parser = datapath.ofproto_parser
-        ofproto = datapath.ofproto
-        match = parser.OFPMatch()
-        actions = [
-            parser.OFPActionOutput(
-                ofproto.OFPP_CONTROLLER,
-                ofproto.OFPCML_NO_BUFFER,
-            )
-        ]
-        instructions = [
-            parser.OFPInstructionActions(
-                ofproto.OFPIT_APPLY_ACTIONS,
-                actions,
-            )
-        ]
-        datapath.send_msg(
-            parser.OFPFlowMod(
-                datapath=datapath,
-                priority=0,
-                match=match,
-                instructions=instructions,
-            )
-        )
 
     @set_ev_cls(
         ofp_event.EventOFPStateChange,
@@ -304,9 +269,12 @@ class ACOSDNController(app_manager.RyuApp):
     def _monitor(self) -> None:
         while True:
             for datapath in list(self.datapaths.values()):
-                self._request_port_stats(datapath)
-                self._request_flow_stats(datapath)
-                self._request_echo(datapath)
+                self.openflow.request_port_stats(datapath)
+                self.openflow.request_flow_stats(datapath)
+                self.openflow.request_echo(
+                    datapath,
+                    encode_echo(time.monotonic()),
+                )
             self._send_link_probes()
             hub.sleep(
                 self.telemetry_settings.poll_interval_seconds
@@ -340,56 +308,10 @@ class ACOSDNController(app_manager.RyuApp):
         self.current_recommendations = (
             analysis.recommendations
         )
-        current_ids = {
-            item.recommendation_id
-            for item in self.current_recommendations
-        }
-        for recommendation in self.current_recommendations:
-            if (
-                recommendation.recommendation_id
-                in self._logged_recommendation_ids
-            ):
-                continue
-            self.logger.warning(
-                "network recommendation: id=%s title=%s "
-                "urgency=%s confidence=%.2f affected=%s "
-                "signals=%s",
-                recommendation.recommendation_id,
-                recommendation.title,
-                recommendation.urgency,
-                recommendation.confidence,
-                len(recommendation.affected_flows),
-                recommendation.rationale,
-            )
-            self.event_timeline.append(
-                occurred_at=time.time(),
-                category="recommendation",
-                severity=(
-                    "warning"
-                    if recommendation.urgency == "high"
-                    else "info"
-                ),
-                title=recommendation.title,
-                details={
-                    "recommendation_id": (
-                        recommendation.recommendation_id
-                    ),
-                    "confidence": (
-                        recommendation.confidence
-                    ),
-                    "urgency": recommendation.urgency,
-                    "signals": list(
-                        recommendation.rationale
-                    ),
-                    "affected_flows": [
-                        list(item)
-                        for item in (
-                            recommendation.affected_flows
-                        )
-                    ],
-                },
-            )
-        self._logged_recommendation_ids = current_ids
+        self.audit.recommendations(
+            self.current_recommendations,
+            occurred_at=wall_now,
+        )
         proposals = self._evaluate_reroutes(metrics, now)
         self.snapshot_store.publish(
             generated_at=wall_now,
@@ -454,9 +376,8 @@ class ACOSDNController(app_manager.RyuApp):
                 simulation=simulation.to_dict(),
             )
             proposals.append(proposal)
-            if (
-                proposal.proposal_id
-                not in self._logged_proposal_ids
+            if self.audit.proposal(
+                proposal, occurred_at=time.time()
             ):
                 learning_observed_at = time.time()
                 self.learning_dataset.record_decision(
@@ -476,29 +397,6 @@ class ACOSDNController(app_manager.RyuApp):
                     simulation_safe=simulation.safe_to_apply,
                     metrics=metrics,
                 )
-                self.event_timeline.append(
-                    occurred_at=time.time(),
-                    category="migration",
-                    severity=(
-                        "warning"
-                        if proposal.forced
-                        else "info"
-                    ),
-                    title="Route migration proposed",
-                    details={
-                        "proposal_id": proposal.proposal_id,
-                        "source_mac": proposal.source_mac,
-                        "destination_mac": (
-                            proposal.destination_mac
-                        ),
-                        "old_path": list(proposal.old_path),
-                        "new_path": list(proposal.new_path),
-                        "old_cost": proposal.old_cost,
-                        "new_cost": proposal.new_cost,
-                        "forced": proposal.forced,
-                        "simulation": proposal.simulation,
-                    },
-                )
             if (
                 self.control_settings.mode
                 == OperatingMode.RECOMMEND
@@ -515,26 +413,11 @@ class ACOSDNController(app_manager.RyuApp):
                 )
                 continue
             if not simulation.safe_to_apply:
-                self.logger.error(
-                    "reroute blocked by what-if simulation: "
-                    "id=%s violations=%s",
-                    proposal.proposal_id,
-                    simulation.proposed.violations,
-                )
-                self.event_timeline.append(
+                self.audit.migration_blocked(
+                    proposal,
+                    violations=simulation.proposed.violations,
+                    warnings=simulation.warnings,
                     occurred_at=time.time(),
-                    category="migration",
-                    severity="error",
-                    title="Route migration blocked by simulation",
-                    details={
-                        "proposal_id": proposal.proposal_id,
-                        "violations": list(
-                            simulation.proposed.violations
-                        ),
-                        "warnings": list(
-                            simulation.warnings
-                        ),
-                    },
                 )
                 continue
             try:
@@ -546,55 +429,27 @@ class ACOSDNController(app_manager.RyuApp):
                     datapaths=self.datapaths,
                     now=now,
                 )
-                self.logger.info(
-                    "route transaction started: id=%s "
-                    "%s -> %s old=%s new=%s generation=%s",
-                    transaction_id,
-                    flow.source_mac,
-                    flow.destination_mac,
-                    flow.path,
-                    migration.decision.path,
-                    migration.decision.topology_generation,
-                )
-                self.event_timeline.append(
+                self.audit.transaction_started(
+                    transaction_id=transaction_id,
+                    proposal=proposal,
+                    old_path=flow.path,
+                    new_path=migration.decision.path,
+                    topology_generation=(
+                        migration.decision.topology_generation
+                    ),
                     occurred_at=time.time(),
-                    category="migration",
-                    severity="info",
-                    title="Route migration transaction started",
-                    details={
-                        "transaction_id": transaction_id,
-                        "proposal_id": proposal.proposal_id,
-                        "old_path": list(flow.path),
-                        "new_path": list(
-                            migration.decision.path
-                        ),
-                        "topology_generation": (
-                            migration.decision
-                            .topology_generation
-                        ),
-                    },
                 )
             except (
                 KeyError,
                 ValueError,
                 StaleTopologyError,
             ) as exc:
-                self.logger.warning(
-                    "flow reroute failed: %s", exc
-                )
-                self.event_timeline.append(
+                self.audit.migration_failed(
+                    proposal,
+                    exc,
                     occurred_at=time.time(),
-                    category="migration",
-                    severity="error",
-                    title="Route migration failed",
-                    details={
-                        "proposal_id": proposal.proposal_id,
-                        "error": str(exc),
-                    },
                 )
-        self._logged_proposal_ids = {
-            item.proposal_id for item in proposals
-        }
+        self.audit.retain_proposals(proposals)
         return tuple(proposals)
 
     @set_ev_cls(
@@ -615,62 +470,9 @@ class ACOSDNController(app_manager.RyuApp):
         self,
         outcome: RouteChangeOutcome,
     ) -> None:
-        result = outcome.result
-        flow = outcome.flow
-        migration = outcome.migration
-        proposal = outcome.proposal
-        if result.status == "committed":
-            self.logger.info(
-                "route transaction committed: id=%s "
-                "old=%s new=%s",
-                result.transaction_id,
-                flow.path,
-                migration.decision.path,
-            )
-            severity = "info"
-            title = "Route migration committed"
-        else:
-            self.logger.error(
-                "route transaction rolled back: id=%s "
-                "reason=%s",
-                result.transaction_id,
-                result.reason,
-            )
-            severity = "error"
-            title = "Route migration rolled back"
-        self.event_timeline.append(
+        self.audit.route_change_outcome(
+            outcome,
             occurred_at=time.time(),
-            category="migration",
-            severity=severity,
-            title=title,
-            details={
-                "transaction_id": result.transaction_id,
-                "proposal_id": proposal.proposal_id,
-                "status": result.status,
-                "reason": result.reason,
-                "old_path": list(flow.path),
-                "new_path": list(
-                    migration.decision.path
-                ),
-            },
-        )
-
-    @staticmethod
-    def _request_port_stats(datapath) -> None:
-        parser = datapath.ofproto_parser
-        request = parser.OFPPortStatsRequest(
-            datapath,
-            0,
-            datapath.ofproto.OFPP_ANY,
-        )
-        datapath.send_msg(request)
-
-    @staticmethod
-    def _request_port_desc(datapath) -> None:
-        datapath.send_msg(
-            datapath.ofproto_parser.OFPPortDescStatsRequest(
-                datapath, 0
-            )
         )
 
     @set_ev_cls(
@@ -697,23 +499,6 @@ class ACOSDNController(app_manager.RyuApp):
             "port capacities discovered: dpid=%s ports=%s",
             datapath.id,
             updated,
-        )
-
-    @staticmethod
-    def _request_flow_stats(datapath) -> None:
-        datapath.send_msg(
-            datapath.ofproto_parser.OFPFlowStatsRequest(
-                datapath
-            )
-        )
-
-    @staticmethod
-    def _request_echo(datapath) -> None:
-        datapath.send_msg(
-            datapath.ofproto_parser.OFPEchoRequest(
-                datapath,
-                data=encode_echo(time.monotonic()),
-            )
         )
 
     def _send_link_probes(self) -> None:
@@ -949,7 +734,7 @@ class ACOSDNController(app_manager.RyuApp):
             or source.dpid != datapath.id
             or source.port != in_port
         ):
-            self._send_packet_out(
+            self.openflow.send_packet_out(
                 msg,
                 in_port,
                 datapath.ofproto.OFPP_FLOOD,
@@ -958,7 +743,7 @@ class ACOSDNController(app_manager.RyuApp):
 
         destination = self.topology.host_location(frame.dst)
         if destination is None:
-            self._send_packet_out(
+            self.openflow.send_packet_out(
                 msg,
                 in_port,
                 datapath.ofproto.OFPP_FLOOD,
@@ -994,7 +779,7 @@ class ACOSDNController(app_manager.RyuApp):
                 decision.cost,
                 decision.used_fallback,
             )
-            self._send_packet_out(
+            self.openflow.send_packet_out(
                 msg,
                 in_port,
                 installation.first_output_port,
@@ -1004,7 +789,7 @@ class ACOSDNController(app_manager.RyuApp):
                 "route installation failed; flooding packet: %s",
                 exc,
             )
-            self._send_packet_out(
+            self.openflow.send_packet_out(
                 msg,
                 in_port,
                 datapath.ofproto.OFPP_FLOOD,
@@ -1041,22 +826,7 @@ class ACOSDNController(app_manager.RyuApp):
         destination_mac = msg.match.get("eth_dst")
         if source_mac is None or destination_mac is None:
             return
-        match = {
-            name: msg.match.get(name)
-            for name in (
-                "eth_src",
-                "eth_dst",
-                "eth_type",
-                "ipv4_src",
-                "ipv4_dst",
-                "ip_proto",
-                "tcp_src",
-                "tcp_dst",
-                "udp_src",
-                "udp_dst",
-            )
-            if msg.match.get(name) is not None
-        }
+        match = self.openflow.extract_match(msg.match)
         removed = self.packet_flow.rule_removed(
             match=match,
             cookie=msg.cookie,
@@ -1101,23 +871,4 @@ class ACOSDNController(app_manager.RyuApp):
                 if transport is not None
                 else None
             ),
-        )
-
-    @staticmethod
-    def _send_packet_out(msg, in_port: int, out_port: int) -> None:
-        datapath = msg.datapath
-        actions = [
-            datapath.ofproto_parser.OFPActionOutput(out_port)
-        ]
-        data = None
-        if msg.buffer_id == datapath.ofproto.OFP_NO_BUFFER:
-            data = msg.data
-        datapath.send_msg(
-            datapath.ofproto_parser.OFPPacketOut(
-                datapath=datapath,
-                buffer_id=msg.buffer_id,
-                in_port=in_port,
-                actions=actions,
-                data=data,
-            )
         )

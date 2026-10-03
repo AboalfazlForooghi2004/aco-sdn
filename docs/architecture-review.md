@@ -26,6 +26,13 @@ telemetry, prediction, recommendations, routing, flow lifecycle, and
 migration. It should become a thin adapter around a domain-level
 control loop.
 
+Progress: the control cycle, packet-flow lifecycle, route-change
+transactions, operator audit trail, and common OpenFlow message
+construction now live behind independently tested services. The Ryu
+application remains the event-wiring composition root; link-probe
+transport and reroute-candidate orchestration are the next extraction
+targets.
+
 Recommended boundary:
 
 ```text
@@ -152,18 +159,11 @@ The following review findings are now implemented:
 - recovery of pending learning outcomes after controller restart;
 - Python 3.10/3.11 CI with compilation of every project package.
 
-The primary remaining structural item is decomposition of the Ryu
-application into a thinner protocol adapter and independently testable
-control-loop services. Hardware/OVS failure-injection tests are also
-required before treating the transaction executor as production-ready.
-
-Route planning, pending-change ownership, transaction completion, and
-registry commit have since moved into `RouteChangeService`. A live
-failure-injection runner now exercises active-link failure,
-active-switch failure, and controller disconnection in Mininet/OVS.
-Telemetry history, prediction, recommendations, and learning-outcome
-settlement now run in `ControlCycleService`. Initial installation,
-host-move cleanup, and rule-expiry accounting now run in
-`PacketFlowService`. The remaining decomposition target is the Ryu
-protocol-event adapter and recommendation/proposal audit logging still
-hosted by `main.py`.
+The primary remaining structural item is completing decomposition of
+the Ryu application. `ControlCycleService`, `PacketFlowService`,
+`RouteChangeService`, `ControllerAuditService`, and
+`OpenFlowProtocol` now isolate most policy, lifecycle, audit, and
+protocol-message responsibilities. Link probing and reroute-candidate
+orchestration remain in the adapter. Hardware/OVS failure-injection
+tests are also required before treating the transaction executor as
+production-ready.

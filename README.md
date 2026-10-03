@@ -38,6 +38,10 @@ and the initial Ryu discovery adapter:
 - independently tested `ControlCycleService` and `PacketFlowService`
   for telemetry/prediction analysis, initial rule installation,
   host cleanup, and rule-expiry accounting.
+- independently tested `RouteChangeService`,
+  `ControllerAuditService`, and `OpenFlowProtocol` boundaries for
+  transaction lifecycle, durable operator events, common OpenFlow
+  requests, packet-out handling, and match extraction.
 
 Port telemetry is collected periodically and converted into
 utilization/loss metrics. The controller now selects an ACO path and
@@ -51,7 +55,7 @@ utilization/loss thresholds are crossed.
 ```text
 aco/          Algorithm, graph model, and cost function
 config/       Reproducible ACO, cost, and rerouting settings
-controller/   Ryu/OpenFlow adapter (next milestone)
+controller/   Thin Ryu event adapter and tested control services
 topology/     Mininet lab topology
 experiments/  Reproducible scenario runners
 learning/     Versioned decision dataset and safe shadow environment
