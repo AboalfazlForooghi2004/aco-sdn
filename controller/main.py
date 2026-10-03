@@ -23,6 +23,10 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event
 
 from controller.api import SnapshotApiServer
+from controller.change_service import (
+    RouteChangeOutcome,
+    RouteChangeService,
+)
 from controller.events import EventTimeline
 from controller.flow_demand import (
     FlowCounters,
@@ -72,7 +76,6 @@ from controller.topology import TopologyManager
 from controller.transactions import (
     RouteTransactionManager,
     StaleTopologyError,
-    TransactionResult,
 )
 from prediction.engine import PredictionEngine
 from recommendation.engine import RecommendationEngine
@@ -145,11 +148,12 @@ class ACOSDNController(app_manager.RyuApp):
             transaction_settings.timeout_seconds,
             journal=self.transaction_journal,
         )
-        self._pending_migrations: dict[str, tuple] = {}
-        self._pending_flow_transactions: dict[
-            tuple, str
-        ] = {}
         self.flow_registry = FlowRegistry()
+        self.change_service = RouteChangeService(
+            self.flow_manager,
+            self.route_transactions,
+            self.flow_registry,
+        )
         self.control_settings = load_control_settings()
         learning_settings = load_learning_settings()
         self.learning_dataset = LearningDataset(
@@ -310,12 +314,12 @@ class ACOSDNController(app_manager.RyuApp):
     def _run_control_cycle(self) -> None:
         now = time.monotonic()
         wall_now = time.time()
-        for result in self.route_transactions.expire(
+        for outcome in self.change_service.expire(
             now=now,
-            current_generation=self.topology.generation,
+            topology=self.topology,
             datapaths=self.datapaths,
         ):
-            self._finalize_route_transaction(result, now)
+            self._record_route_change_outcome(outcome)
         metrics = self._current_metrics(now)
         self.telemetry_history.append(
             observed_at=wall_now,
@@ -413,7 +417,7 @@ class ACOSDNController(app_manager.RyuApp):
             return ()
         proposals = []
         for flow in self.flow_registry.flows:
-            if flow.key in self._pending_flow_transactions:
+            if self.change_service.is_pending(flow):
                 continue
             migration = self.reroute_manager.evaluate(
                 flow,
@@ -538,63 +542,14 @@ class ACOSDNController(app_manager.RyuApp):
                 )
                 continue
             try:
-                new_route_generation = (
-                    flow.route_generation + 1
-                )
-                new_rules = build_bidirectional_plan(
+                transaction_id = self.change_service.start(
+                    flow=flow,
+                    migration=migration,
+                    proposal=proposal,
                     topology=self.topology,
-                    path=migration.decision.path,
-                    source_mac=flow.source_mac,
-                    destination_mac=flow.destination_mac,
-                    source_host_port=flow.source_host_port,
-                    destination_host_port=(
-                        flow.destination_host_port
-                    ),
-                    selector=flow.selector,
-                    cookie=self.flow_manager.cookie_for(
-                        flow.key, new_route_generation
-                    ),
-                )
-                old_rules = build_bidirectional_plan(
-                    topology=self.topology,
-                    path=flow.path,
-                    source_mac=flow.source_mac,
-                    destination_mac=flow.destination_mac,
-                    source_host_port=flow.source_host_port,
-                    destination_host_port=(
-                        flow.destination_host_port
-                    ),
-                    selector=flow.selector,
-                    cookie=self.flow_manager.cookie_for(
-                        flow.key, flow.route_generation
-                    ),
-                )
-                transaction_id = (
-                    f"{proposal.proposal_id}-"
-                    f"{time.monotonic_ns()}"
-                )
-                self.route_transactions.begin(
-                    transaction_id=transaction_id,
-                    topology_generation=(
-                        migration.decision.topology_generation
-                    ),
-                    current_generation=(
-                        self.topology.generation
-                    ),
                     datapaths=self.datapaths,
-                    old_rules=old_rules,
-                    new_rules=new_rules,
                     now=now,
                 )
-                self._pending_migrations[transaction_id] = (
-                    flow,
-                    migration,
-                    proposal,
-                    new_route_generation,
-                )
-                self._pending_flow_transactions[
-                    flow.key
-                ] = transaction_id
                 self.logger.info(
                     "route transaction started: id=%s "
                     "%s -> %s old=%s new=%s generation=%s",
@@ -650,42 +605,25 @@ class ACOSDNController(app_manager.RyuApp):
         ofp_event.EventOFPBarrierReply, MAIN_DISPATCHER
     )
     def barrier_reply_handler(self, ev) -> None:
-        result = self.route_transactions.acknowledge(
+        outcome = self.change_service.acknowledge(
             dpid=ev.msg.datapath.id,
             xid=ev.msg.xid,
-            current_generation=self.topology.generation,
+            topology=self.topology,
             datapaths=self.datapaths,
             now=time.monotonic(),
         )
-        if result is not None:
-            self._finalize_route_transaction(
-                result, time.monotonic()
-            )
+        if outcome is not None:
+            self._record_route_change_outcome(outcome)
 
-    def _finalize_route_transaction(
+    def _record_route_change_outcome(
         self,
-        result: TransactionResult,
-        now: float,
+        outcome: RouteChangeOutcome,
     ) -> None:
-        context = self._pending_migrations.pop(
-            result.transaction_id, None
-        )
-        if context is None:
-            return
-        (
-            flow,
-            migration,
-            proposal,
-            new_route_generation,
-        ) = context
-        self._pending_flow_transactions.pop(flow.key, None)
+        result = outcome.result
+        flow = outcome.flow
+        migration = outcome.migration
+        proposal = outcome.proposal
         if result.status == "committed":
-            self.flow_registry.replace(
-                flow,
-                migration.decision,
-                changed_at=now,
-                route_generation=new_route_generation,
-            )
             self.logger.info(
                 "route transaction committed: id=%s "
                 "old=%s new=%s",

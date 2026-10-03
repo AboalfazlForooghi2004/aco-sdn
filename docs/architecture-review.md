@@ -156,3 +156,10 @@ The primary remaining structural item is decomposition of the Ryu
 application into a thinner protocol adapter and independently testable
 control-loop services. Hardware/OVS failure-injection tests are also
 required before treating the transaction executor as production-ready.
+
+Route planning, pending-change ownership, transaction completion, and
+registry commit have since moved into `RouteChangeService`. A live
+failure-injection runner now exercises active-link failure,
+active-switch failure, and controller disconnection in Mininet/OVS.
+The remaining decomposition target is the telemetry/prediction control
+cycle and the packet/event adapter code still hosted by `main.py`.
