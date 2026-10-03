@@ -161,5 +161,9 @@ Route planning, pending-change ownership, transaction completion, and
 registry commit have since moved into `RouteChangeService`. A live
 failure-injection runner now exercises active-link failure,
 active-switch failure, and controller disconnection in Mininet/OVS.
-The remaining decomposition target is the telemetry/prediction control
-cycle and the packet/event adapter code still hosted by `main.py`.
+Telemetry history, prediction, recommendations, and learning-outcome
+settlement now run in `ControlCycleService`. Initial installation,
+host-move cleanup, and rule-expiry accounting now run in
+`PacketFlowService`. The remaining decomposition target is the Ryu
+protocol-event adapter and recommendation/proposal audit logging still
+hosted by `main.py`.
