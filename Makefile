@@ -1,4 +1,4 @@
-.PHONY: test offline preflight controller topology live clean
+.PHONY: test offline preflight controller topology live failure clean
 
 PYTHON ?= python
 RYU_MANAGER ?= ryu-manager
@@ -23,6 +23,11 @@ live:
 	$(PYTHON) scripts/lab_preflight.py
 	sudo $(PYTHON) -m experiments.live_runner \
 		--output results/live_comparison.csv
+
+failure:
+	$(PYTHON) scripts/lab_preflight.py
+	sudo $(PYTHON) -m experiments.failure_injection \
+		--output results/failure_injection.csv
 
 clean:
 	sudo mn -c

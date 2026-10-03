@@ -218,6 +218,17 @@ validates ACO rerouting, make-before-break ordering, FlowMod creation,
 and strict deletion without requiring root or OVS. Run
 `make preflight` on the Ubuntu host before live tests.
 
+Run active-path failure injection against a running controller with:
+
+```bash
+make failure
+```
+
+The suite discovers the active first-hop branch, cuts its middle link,
+stops its switch, disconnects all switch-controller sessions, measures
+recovery time and packet loss, restores each fault, and exits non-zero
+when a scenario does not recover.
+
 ## Offline learning safety boundary
 
 The controller records versioned routing decisions and delayed outcomes in
